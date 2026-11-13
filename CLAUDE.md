@@ -156,7 +156,7 @@ Report status and engineer repair status are **separate fields**. Never merge th
 |---|---|
 | Frontend | React + Vite |
 | Styling | Tailwind CSS |
-| Main backend | Node.js + Express.js (TypeScript) |
+| Main backend | Node.js 24 LTS + Express.js (TypeScript) |
 | ORM | Prisma |
 | Database | PostgreSQL |
 | AI service | Python + FastAPI, YOLOv8 (Ultralytics) + PyTorch |
@@ -341,7 +341,11 @@ Expectations:
 - Give explicit types to function parameters and return values, request and response shapes, and service interfaces. Define shared types in one place instead of repeating them.
 - Avoid unnecessary `any`. When a value's type is genuinely unknown, use `unknown` and narrow it before use.
 - Use Prisma's generated types for database models instead of redefining them by hand.
-- TypeScript compiler settings (for example strict mode) are to be agreed.
+- **Runtime: Node.js 24 LTS** (confirmed). `package.json` declares `"engines": { "node": ">=24 <25" }`.
+- **Compiler settings** (confirmed, in `backend/api/tsconfig.json`): `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride` and `noFallthroughCasesInSwitch` are enabled. Do not weaken them.
+- **Module system:** native ES modules (`"type": "module"` with `"module": "nodenext"`). Relative imports must use the `.js` extension, for example `import { x } from "./util.js"`.
+- **Entry point:** `src/index.ts`, compiled to `dist/index.js`. TypeScript source lives in `src/`; compiled output goes to `dist/` (not in Git).
+- **Scripts:** `npm run dev` runs `tsx watch src/index.ts` (auto-restart on changes, **no type checking**). `npm run typecheck` runs `tsc --noEmit`. `npm run build` compiles to `dist/`. `npm start` runs `node dist/index.js`. Run `typecheck` before considering work finished, because `tsx` does not check types.
 - `camelCase` for functions and variables, `PascalCase` for classes, interfaces and types.
 - Keep routes thin; business logic lives in services. All database access goes through Prisma.
 - The ESLint/Prettier setup is to be agreed.
@@ -423,5 +427,5 @@ Expectations:
 - [ ] Location storage in PostgreSQL (plain latitude/longitude columns or PostGIS)
 - [ ] Prisma migration workflow
 - [ ] PostgreSQL hosting/deployment (for example local install, Docker or a managed service)
-- [ ] Python/Node versions and lint/format tooling
+- [ ] Python version and lint/format tooling
 - [ ] Deployment target

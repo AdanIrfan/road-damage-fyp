@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    // Where the code lives: TypeScript source in src/, compiled JavaScript in dist/.
+    "rootDir": "./src",
+    "outDir": "./dist",
+
+    // Module system: native ES modules, checked using Node.js's own rules.
+    // Must match "type": "module" in package.json.
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "verbatimModuleSyntax": true,
+
+    // Output JavaScript and built-in APIs supported by Node.js 24.
+    "target": "es2024",
+    "lib": ["es2024"],
+
+    // Global type definitions to load. Since TypeScript 6.0 none are loaded by default.
+    "types": ["node"],
+
+    // Type checking.
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+
+    // Debugging and build speed.
+    "sourceMap": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"]
+}
