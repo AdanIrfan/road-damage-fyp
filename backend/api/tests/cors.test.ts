@@ -37,13 +37,13 @@ describe("CORS", () => {
       headers: {
         origin: ALLOWED,
         "access-control-request-method": "POST",
-        "access-control-request-headers": "content-type,authorization",
+        "access-control-request-headers": "content-type,x-csrf-token",
       },
     });
     assert.equal(res.status, 204);
     assert.equal(res.headers.get("access-control-allow-origin"), ALLOWED);
     assert.match(res.headers.get("access-control-allow-methods") ?? "", /POST/);
-    assert.equal(res.headers.get("access-control-allow-headers"), "Content-Type,Authorization");
+    assert.equal(res.headers.get("access-control-allow-headers"), "Content-Type,Authorization,X-CSRF-Token");
     assert.equal(res.headers.get("access-control-max-age"), "600");
   });
 

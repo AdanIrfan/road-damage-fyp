@@ -2,7 +2,10 @@
 
 **Project:** AI-Powered Road Infrastructure Damage Detection, Severity Assessment and Maintenance Management System
 **Type:** Final Year Project (FYP)
-**Status:** Phase 1 (backend foundation) complete. The main backend (`backend/api/`) has its Express + TypeScript + Prisma foundation, health endpoints, CORS, error handling and tests. **No application features (authentication, reports, users, etc.) are implemented yet.** The frontend and the AI service have not been started.
+**Status:** Phase 2 (authentication and user management) implemented.
+- **Phase 1 — backend foundation:** Express + TypeScript + Prisma, health endpoints, CORS, error handling, tests.
+- **Phase 2 — authentication and user management:** citizen registration with SMS OTP verification (mock SMS in development only), login/logout, cookie-based JWT sessions with refresh-token rotation, CSRF protection, role-based authorization, admin bootstrap CLI, admin engineer management, and the React frontend for all of these.
+- **Not implemented yet:** road-damage reports, AI inference (the AI service has not been started), admin report review, engineer repair workflows, chat, maps, analytics, notifications other than the OTP SMS, and a real SMS provider.
 
 This file is the main reference for anyone (human or AI) working in this repository. If anything here conflicts with an explicit instruction from the project owner, the owner's instruction wins. Update this file when decisions are made.
 
@@ -79,7 +82,9 @@ Rules:
 - An engineer can only see and update jobs **assigned to them**, and can access only **their own** profile.
 - Admins **monitor** repair status; only the assigned engineer updates it.
 - **Multiple admin accounts** must be supported. Do not assume there is only one admin.
-- Admin accounts are **not** created through public registration. How the first admin account is created (seed script or CLI command) is still to be decided.
+- Admin accounts are **not** created through public registration. Admins are created only with the CLI script `npm run admin:create` (implemented; see §7.2). It refuses to create another admin unless `--additional` is passed.
+- **Implemented (Phase 2):** roles are the PostgreSQL enum `UserRole` = `CITIZEN | ADMIN | ENGINEER`. Account status is `AccountStatus` = `PENDING_VERIFICATION | ACTIVE | DEACTIVATED`. Authorization is enforced in the backend (`requireRole`); the frontend only hides what a role cannot use.
+- **Implemented admin user management:** engineer accounts only (create, list, view, update, activate/deactivate). Managing citizen or other admin accounts through the API is **not** implemented yet.
 
 ---
 
@@ -89,7 +94,13 @@ Rules:
 1. The citizen enters their name, mobile number and password.
 2. The system sends a one-time verification code by SMS.
 3. The citizen enters the code. The account becomes active only after the number is verified.
-4. The citizen logs in and receives a JWT. (The login method is not confirmed yet; see §7.2.)
+4. The citizen logs in with **mobile number + password** and receives a cookie-based JWT session (implemented; see §7.2).
+
+Implementation details (Phase 2):
+- Mobile numbers are validated as **mobile** numbers and stored in **E.164** (e.g. `+12025550143`). Without `PHONE_DEFAULT_COUNTRY`, users must type the `+country code`.
+- A number that belongs to a verified (or non-citizen) account cannot be registered again (409). An **unverified** registration does not lock the number: registering again (after the resend cooldown) replaces the unproven details, and whoever proves ownership with the OTP wins.
+- OTP: 6 digits from `crypto.randomInt`, stored only as an HMAC-SHA256 hash, valid **10 minutes**, max **5 wrong attempts** per code (then it is burned), **60 s** resend cooldown, max **5 codes per hour** per account. A new code invalidates older ones; a used code can never be reused.
+- The account becomes `ACTIVE` only when the OTP is verified. Unverified citizens cannot log in (403 `ACCOUNT_NOT_VERIFIED`, revealed only after a correct password).
 
 ### 3.2 Report submission
 1. The citizen chooses **Live camera** or **Gallery upload**.
@@ -170,6 +181,10 @@ MongoDB is **not** part of this project. Do not add MongoDB or any MongoDB-relat
 
 Other libraries in use in the main backend (approved): `helmet` (security headers), `cors` (CORS), `tsx` (development runner), `typescript`, `prisma` / `@prisma/client` / `@prisma/adapter-pg`.
 
+Added in Phase 2 (authentication):
+- **Main backend:** `zod` (request validation), `@node-rs/argon2` (Argon2id password hashing), `jose` (JWT), `cookie-parser`, `express-rate-limit`, `libphonenumber-js` (mobile number validation/E.164).
+- **Frontend (TypeScript):** `react` 19, `react-dom`, `react-router` 8 (declarative routing), `vite` 8, `@vitejs/plugin-react`, `tailwindcss` 4 with `@tailwindcss/vite`, `typescript`.
+
 Library choices not listed here (for example the request validation library, the WebSocket library, the EXIF library, password hashing, or frontend state management) must be **proposed to the owner and approved** before use.
 
 ---
@@ -178,18 +193,20 @@ Library choices not listed here (for example the request validation library, the
 
 ```text
 road-damage-fyp/
-├── frontend/src/
-│   ├── assets/          static images and icons
-│   ├── components/      shared, reusable UI components
-│   ├── features/        feature modules (UI + feature-specific hooks/api calls)
-│   │   ├── auth/  citizen/  admin/  engineer/  chat/  notifications/
-│   ├── hooks/           shared React hooks
-│   ├── layouts/         role-specific page layouts
-│   ├── lib/             configured clients (API/HTTP client, WebSocket client, map setup)
-│   ├── pages/           route-level pages
-│   ├── routes/          routing and role-based route guards
-│   ├── styles/          Tailwind entry and global styles
-│   └── utils/           pure helper functions
+├── frontend/            React + Vite + Tailwind (TypeScript); see "Frontend layout" below
+│   ├── index.html  vite.config.ts  tsconfig.json  package.json  .env.example
+│   └── src/
+│       ├── assets/          static images and icons
+│       ├── components/      shared, reusable UI components
+│       ├── features/        feature modules (UI + feature-specific hooks/api calls)
+│       │   ├── auth/  citizen/  admin/  engineer/  chat/  notifications/
+│       ├── hooks/           shared React hooks
+│       ├── layouts/         page layouts (auth pages, logged-in app)
+│       ├── lib/             configured clients (API/HTTP client, later WebSocket client, map setup)
+│       ├── pages/           route-level pages shared by several roles
+│       ├── routes/          routing and role-based route guards
+│       ├── styles/          Tailwind entry and global styles
+│       └── utils/           pure helper functions
 │
 ├── backend/
 │   ├── api/                 Node.js + Express main backend (see "Main backend layout" below)
@@ -215,28 +232,67 @@ road-damage-fyp/
 ### Main backend layout (`backend/api/`, current)
 ```text
 src/
-├── index.ts               entry point: load + validate env, create Prisma client, start server, graceful shutdown
+├── index.ts               entry point: load + validate env, create SMS sender, Prisma client and services, start server, graceful shutdown
 ├── app.ts                 createApp(): builds the Express app (no server), so tests can use fake dependencies
-├── config/env.ts          .env loading and environment validation
+├── config/
+│   ├── env.ts             .env loading and environment validation
+│   └── auth.ts            auth constants (token lifetimes, OTP limits, cookie names)
 ├── db/prisma.ts           Prisma client factory (PrismaPg adapter); one client is created in index.ts and injected
 ├── routes/
 │   ├── index.ts           everything under /api (health + /v1)
 │   ├── health.routes.ts   /api/health, /api/health/db
-│   └── v1/index.ts        /api/v1 router: all application routes are added here
-├── controllers/           request/response handling (thin)
+│   └── v1/index.ts        /api/v1 router: auth, profile and admin routes (all application routes go here)
+├── controllers/           request/response handling (thin): auth, profile, engineers, health
 ├── services/              business logic and database access
-├── middleware/            cors, errorHandler, notFound, requestLogger
-├── types/api.ts           shared API response types
-├── utils/                 apiResponse (sendSuccess/sendError), httpError (HttpError)
+│   ├── index.ts           createServices(): wires all services (used by index.ts and tests)
+│   ├── auth.service.ts    register, verify mobile, login, refresh, logout, change password
+│   ├── otp.service.ts     OTP generation, hashing, limits, verification
+│   ├── token.service.ts   access JWTs, refresh-token rotation/revocation
+│   ├── user.service.ts    publicUserSelect (the only user fields sent to clients), profile
+│   ├── engineer.service.ts  admin engineer management
+│   ├── adminBootstrap.service.ts  admin creation for the CLI script
+│   ├── password.service.ts  Argon2id hashing/verification
+│   ├── sms/               SmsSender interface + MockSmsSender (development only)
+│   └── clock.ts           injectable clock (tests simulate expiry)
+├── middleware/            cors, csrf, auth (authenticate / requireRole / requirePasswordChanged), rateLimit, errorHandler, notFound, requestLogger
+├── validation/schemas.ts  zod schemas for every request body, params and query
+├── scripts/createAdmin.ts admin bootstrap CLI (`npm run admin:create`)
+├── types/                 api.ts (response types), express.d.ts (req.auth)
+├── utils/                 apiResponse, httpError, validation (parseInput), authCookies, crypto, phone
 └── generated/prisma/      generated Prisma client (NOT in Git; recreated by `prisma generate`)
+prisma/
+├── schema.prisma          User, OtpCode, RefreshToken models
+└── migrations/            committed SQL migrations
 tests/
-├── *.test.ts              node:test test files
-├── helpers/               test helpers (e.g. startTestServer)
+├── *.test.ts              node:test test files (auth, admin, cors, env, errorHandling, health)
+├── helpers/               startTestServer, testDb (isolated test schema), authTestApp (fake SMS, test clock, cookie/CSRF client)
 └── tsconfig.json          type-checks tests together with src/
 ```
 - Request flow: **route → controller → service → Prisma**. Routes and controllers contain no business logic.
 - Dependencies (such as the database check or, later, services) are passed into `createApp()` rather than imported as globals, so tests never need a real database.
 - New application features add a router under `src/routes/v1/` (plus controller and service), mounted in `src/routes/v1/index.ts`.
+- Every request body, params object and query string is validated with a zod schema (`parseInput`); unknown fields are rejected. Responses that contain users must use `publicUserSelect`.
+
+### Frontend layout (`frontend/`, current)
+```text
+src/
+├── main.tsx                     BrowserRouter + AuthProvider + routes
+├── lib/api.ts                   the ONLY HTTP client: cookies (credentials: include), CSRF header, one silent refresh + retry on 401
+├── lib/types.ts                 User / role / status types (mirror the backend's public user)
+├── features/auth/               AuthContext (who is logged in), authApi/profileApi, Login, Register, VerifyOtp,
+│                                ChangePasswordPage (forced for temporary passwords), ChangePasswordForm
+├── features/admin/              engineersApi, EngineersPage (list/search/filter/paginate/create/activate),
+│                                EngineerDetailPage (view/edit/activate), CreateEngineerForm
+├── pages/                       ProfilePage (citizen/engineer/admin own profile), NotFoundPage
+├── layouts/                     AuthLayout (login/register cards), AppLayout (role-aware navigation, logout)
+├── routes/                      AppRoutes, guards (RequireAuth, RequireRole, PublicOnly, HomeRedirect)
+├── components/ui.tsx            Button, TextField, Alert, Card, Badge, Spinner
+├── utils/format.ts              labels and date formatting
+└── styles/index.css             Tailwind entry
+```
+- Routes: `/login`, `/register`, `/verify` (logged-out only); `/profile` (all roles); `/admin/engineers`, `/admin/engineers/:id` (ADMIN only); `/change-password` (forced while `mustChangePassword`); `/` redirects by role (admin → engineers, others → profile).
+- Tokens are **never** stored in `localStorage`/`sessionStorage`; the CSRF token is kept in memory only.
+- In development the Vite dev server proxies `/api` to the backend (`API_PROXY_TARGET`, default `http://localhost:3000`), so the browser sees one origin.
 
 ### Separation of responsibilities
 - **Frontend:** presentation, user input, client-side validation for user experience, camera/GPS capture, map display. It **never** makes security decisions; the UI hiding something is not access control.
@@ -278,7 +334,12 @@ tests/
 - **PostgreSQL** is the database. The main backend accesses it **only through Prisma**. The AI service does not access the database.
 - The database structure is defined in the Prisma schema, and schema changes go through Prisma. The migration workflow is to be agreed (§14).
 - Likely tables (to be confirmed): `users`, `reports`, `assignments`, `messages`, `notifications`, `otp_codes`.
-- **Current state:** `backend/api/prisma/schema.prisma` contains only the generator and datasource — **no models**, and **no migrations** have been created or run.
+- **Current state (Phase 2):** three tables, created by migration `20261113000000_auth_users_otp_refresh_tokens` (applied to `public` with `prisma migrate deploy`):
+  - `users`: `id` (uuid), `full_name`, `mobile_number` (**unique**, E.164), `password_hash` (Argon2id), `role` (`UserRole`), `status` (`AccountStatus`), `mobile_verified_at`, `must_change_password`, `created_by_id` (→ users, SET NULL), `created_at`, `updated_at`. Indexes on (`role`, `status`) and `created_at`.
+  - `otp_codes`: `user_id` (→ users, CASCADE), `purpose`, `code_hash` (HMAC, never the code), `expires_at`, `attempts`, `consumed_at`, `created_at`. Index on (`user_id`, `purpose`, `created_at`).
+  - `refresh_tokens`: `user_id` (→ users, CASCADE), `token_hash` (**unique**, SHA-256), `family_id`, `expires_at`, `revoked_at`, `replaced_by_id` (→ refresh_tokens, unique), `created_at`. Indexes on `user_id`, `family_id`, `expires_at`.
+  - Timestamps are `timestamptz(3)`; table/column names are snake_case (`@@map`/`@map`).
+- **Test schemas:** automated tests use a separate schema `app_test` (override with `TEST_DATABASE_SCHEMA`, must end with `_test`) in the same database; migrations are deployed there and its tables are truncated between tests. Tests never touch `public`.
 - Local database: PostgreSQL 18 on `localhost:5432`, database `road_damage_db`, dedicated user `road_damage_user` (already created; credentials only in the local `.env`).
 
 #### Prisma 7 setup (current)
@@ -293,6 +354,11 @@ tests/
 - **Never** run destructive commands against the project database without explicit approval: `prisma migrate reset`, `prisma db push --force-reset`, dropping/recreating the database, or changing the database user or password.
 - After any schema change, run `npm run prisma:generate` so the generated client matches.
 - Migrations that are approved and created must be committed to Git (`prisma/migrations/`).
+- **How migrations are created (current workflow):** `road_damage_user` can create schemas but **cannot create databases**, so `prisma migrate dev` (which needs a shadow database) does not work. Instead:
+  1. Change `schema.prisma`.
+  2. Generate SQL against the live schema: `npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script > prisma/migrations/<timestamp>_<name>/migration.sql` (for the very first migration `--from-empty` was used).
+  3. **Review the SQL** for anything destructive (`DROP`, `ALTER … TYPE`, data loss) and get approval.
+  4. Apply with `npm run prisma:migrate:deploy` (non-destructive, no shadow database); check with `npm run prisma:migrate:status`.
 
 Expectations:
 - Store image **file paths/keys** in the database, not image binaries.
@@ -302,13 +368,28 @@ Expectations:
 - Keep an audit trail of status changes (who, what, when).
 - The database connection string comes from environment variables, never from code.
 
-### 7.2 Authentication (JWT)
-- Passwords are hashed with a strong, slow hash (for example bcrypt or argon2). Never store or log plain text passwords.
-- JWT access tokens are short-lived and carry the user id and role. The secret comes from the environment.
-- Token storage and refresh strategy on the frontend (memory/httpOnly cookie vs localStorage) needs a decision — see Open Decisions.
-- Role checks are implemented in the main backend (for example as Express middleware).
-- Login identifier: mobile number + password is the **proposed** approach, not a confirmed decision. Whether email login is also supported is undecided.
-- Mobile numbers are verified by an OTP sent over SMS. OTPs are stored hashed, expire, and have limited attempts.
+### 7.2 Authentication (JWT) — implemented in Phase 2
+- **Passwords:** Argon2id (`@node-rs/argon2` defaults: m=19456 KiB, t=2, p=1), 8–128 characters. Never stored, logged or returned in plain text. Login runs a dummy hash for unknown accounts so timing does not reveal which numbers exist; wrong number and wrong password give the same 401 `INVALID_CREDENTIALS`.
+- **Login identifier:** mobile number + password (confirmed and implemented). Email login is **not** implemented (undecided).
+- **Secrets:** one `AUTH_SECRET` (≥ 32 chars); separate keys for JWT signing, OTP hashing and CSRF tokens are derived from it with HKDF-SHA256.
+- **Sessions use httpOnly cookies only** (never `localStorage`):
+
+  | Cookie | Content | Lifetime | Path |
+  |---|---|---|---|
+  | `access_token` | JWT (HS256, `sub` = user id, `role`, issuer `road-damage-api`, audience `road-damage-web`) | **15 min** | `/api` |
+  | `refresh_token` | random 256-bit token; only its SHA-256 is stored in `refresh_tokens` | **7 days** | `/api/v1/auth` |
+  | `csrf_token` | signed CSRF token (see below) | session | `/` |
+
+  All are `HttpOnly`, `SameSite=Lax` by default (`COOKIE_SAMESITE`), and `Secure` when `NODE_ENV=production`.
+- **Every authenticated request re-checks the account** in the database (`authenticate` middleware): a deactivated or deleted account is rejected immediately, even with an unexpired access token.
+- **Refresh-token rotation:** `POST /auth/refresh` consumes the refresh token (single use, atomic) and issues a new pair in the same *family*. Presenting an already-used or revoked token is treated as theft: the **whole family is revoked** (that login session ends on every device that shares it). The frontend serialises refresh calls so it never races itself.
+- **Logout** revokes the refresh-token family and clears the cookies. An access token copied before logout stays valid until it expires (≤ 15 min) — standard JWT trade-off.
+- **Password change** requires the current password, revokes **all** the user's sessions and issues a fresh session to the current device.
+- **Temporary passwords:** engineers (created by an admin) have `must_change_password = true`. Until they change it they can only view their profile, change the password, refresh and log out; other routes return 403 `PASSWORD_CHANGE_REQUIRED` and the frontend forces `/change-password`.
+- **CSRF protection** (signed double-submit token): the frontend calls `GET /api/v1/auth/csrf`, which sets the `csrf_token` cookie and returns the same token in the body (kept in memory). Every `POST/PUT/PATCH/DELETE` under `/api/v1` — including login and registration — must send it in `X-CSRF-Token`; the header must equal the cookie and carry a valid HMAC signature, otherwise 403 `CSRF_TOKEN_INVALID`. The CORS allow-list (403 for foreign origins) and SameSite cookies are additional layers.
+- **Role checks:** `requireRole(...)` middleware; admin routes use `authenticate → requireRole("ADMIN") → requirePasswordChanged`.
+- **Admin bootstrap:** `npm run admin:create` (first admin) / `npm run admin:create -- --additional` (more admins). It prompts for name, mobile number and password (hidden on a terminal; piped input also works), never prints the password, and uses a PostgreSQL advisory lock so concurrent runs cannot create two "first" admins. There is no HTTP endpoint for creating admins.
+- **Rate limits** (per IP, in memory, disabled in tests): login 10 / 15 min, registration 10 / hour, OTP verify+resend 20 / 15 min → 429 `TOO_MANY_REQUESTS`. OTP also has per-account limits (§3.1).
 
 ### 7.3 REST API expectations
 - **Route convention (confirmed):**
@@ -319,7 +400,27 @@ Expectations:
   - Success: `{ "success": true, "data": ... }`
   - Error: `{ "success": false, "error": { "code": "SOME_CODE", "message": "Safe, human-readable message" } }`
 - **Errors (implemented):** throw `HttpError(status, code, message, { cause })` from handlers; the central error handler formats it. Unknown routes return 404 `NOT_FOUND`; invalid JSON 400 `INVALID_JSON`; JSON bodies over 100 KB 413 `PAYLOAD_TOO_LARGE`; anything unexpected 500 `INTERNAL_ERROR` with a generic message. Internal details and causes are logged on the server only. A `stack` field is included **only** for unexpected 5xx errors and **only** when `NODE_ENV=development`.
-- Use JSON. Validate every request in the main backend (the validation library is to be agreed). Never return internal fields such as password hashes.
+- **Implemented endpoints (Phase 2)** — all under `/api/v1`, all state-changing ones need `X-CSRF-Token`:
+
+  | Method & path | Access | Purpose |
+  |---|---|---|
+  | `GET /auth/csrf` | public | issue CSRF token (cookie + body) |
+  | `POST /auth/register` | public | citizen registration (`fullName`, `mobileNumber`, `password`, `confirmPassword`) → 201, OTP sent |
+  | `POST /auth/otp/verify` | public | verify mobile (`mobileNumber`, `code`) |
+  | `POST /auth/otp/resend` | public | new OTP (generic response if no pending account) |
+  | `POST /auth/login` | public | sets session cookies, returns `{ user }` |
+  | `POST /auth/refresh` | refresh cookie | rotates tokens, returns `{ user }` |
+  | `POST /auth/logout` | any | revokes the session, clears cookies |
+  | `GET /auth/me` | logged in | current user |
+  | `GET /profile` / `PATCH /profile` | logged in (PATCH needs changed password) | own profile / update `fullName` |
+  | `POST /profile/password` | logged in | change password (`currentPassword`, `newPassword`, `confirmNewPassword`) |
+  | `GET /admin/engineers?page&pageSize&search&status` | ADMIN | list engineers (paginated) |
+  | `POST /admin/engineers` | ADMIN | create engineer (`fullName`, `mobileNumber`, `temporaryPassword`) |
+  | `GET /admin/engineers/:id` / `PATCH /admin/engineers/:id` | ADMIN | view / update (`fullName`, `mobileNumber`) |
+  | `PATCH /admin/engineers/:id/status` | ADMIN | `{ status: "ACTIVE" \| "DEACTIVATED" }`; deactivation revokes sessions |
+
+  Main error codes: `VALIDATION_ERROR` (400, `details.fields` per field), `INVALID_CREDENTIALS`, `UNAUTHENTICATED`, `TOKEN_EXPIRED`, `SESSION_INVALID` (401), `FORBIDDEN`, `ACCOUNT_NOT_VERIFIED`, `ACCOUNT_DEACTIVATED`, `PASSWORD_CHANGE_REQUIRED`, `CSRF_TOKEN_INVALID`, `CORS_ORIGIN_NOT_ALLOWED` (403), `ENGINEER_NOT_FOUND` (404), `MOBILE_ALREADY_REGISTERED` (409), `OTP_INVALID`, `OTP_EXPIRED`, `OTP_ATTEMPTS_EXCEEDED` (400), `OTP_RESEND_TOO_SOON`, `OTP_RESEND_LIMIT`, `TOO_MANY_REQUESTS` (429, with `details.retryAfterSeconds` for OTP), `SMS_UNAVAILABLE` (503).
+- Use JSON. Validate every request in the main backend with **zod** (`src/validation/schemas.ts`, adopted in Phase 2). Never return internal fields such as password hashes, OTP hashes or refresh-token hashes.
 - Use correct HTTP status codes and a consistent error format.
 - List endpoints support **pagination**, **sorting** and **filters**, including: location/area, severity, damage class, submission date range, report status, AI confidence range, assigned engineer, assignment status, location verification status, repair status, priority, possible duplicates, and unassigned only.
 - Uploads use `multipart/form-data`.
@@ -347,7 +448,7 @@ These stay unversioned and must keep working without authentication.
 - Outside production, if `CORS_ORIGIN` is not set, the default is the Vite dev server `http://localhost:5173`. **In production `CORS_ORIGIN` is required**; the server refuses to start without it.
 - A request from a disallowed origin (including a preflight) is rejected with **403 `CORS_ORIGIN_NOT_ALLOWED`** before reaching any route.
 - Requests without an `Origin` header (curl, server-to-server) are served without CORS headers. CORS is a browser protection only; authentication will protect the API itself.
-- Preflight `OPTIONS` requests are answered with 204; allowed methods `GET, HEAD, POST, PUT, PATCH, DELETE`; allowed request headers `Content-Type, Authorization`; preflight cache 600 s; `Access-Control-Allow-Credentials: true` (kept so httpOnly-cookie auth remains possible — JWT storage is still undecided, §14).
+- Preflight `OPTIONS` requests are answered with 204; allowed methods `GET, HEAD, POST, PUT, PATCH, DELETE`; allowed request headers `Content-Type, Authorization, X-CSRF-Token`; preflight cache 600 s; `Access-Control-Allow-Credentials: true` (**required**: authentication uses httpOnly cookies, §7.2).
 - Implemented in `src/middleware/cors.ts`, registered before the body parser and routes.
 
 ### 7.7 Environment variables (main backend)
@@ -359,6 +460,13 @@ Configured in `backend/api/.env` (never committed; template in `backend/api/.env
 | `PORT` | no | `3000` | 1–65535 |
 | `DATABASE_URL` | **yes** | — | `postgresql://road_damage_user:PASSWORD@localhost:5432/road_damage_db?schema=public`. Special characters in the password must be URL-encoded. The placeholder `YOUR_PASSWORD` is rejected. |
 | `CORS_ORIGIN` | in production | `http://localhost:5173` (non-production only) | Comma-separated allowed origins (§7.6). |
+| `AUTH_SECRET` | **yes** | — | ≥ 32 characters, random (`openssl rand -base64 48`). Keys for JWT, OTP hashing and CSRF are derived from it. Changing it logs everyone out and invalidates pending OTPs. Placeholder `CHANGE_ME` is rejected. |
+| `SMS_PROVIDER` | yes (except `test`) | — | `mock` = development only (prints codes to the server console, sends nothing). No real provider exists yet, so **production refuses to start** (§9). |
+| `PHONE_DEFAULT_COUNTRY` | no | none | ISO code (e.g. `GB`) used when a number is typed without `+country code`. |
+| `COOKIE_SAMESITE` | no | `lax` | `lax`, `strict` or `none` (`none` only with `NODE_ENV=production`). |
+| `TEST_DATABASE_SCHEMA` | no (tests only) | `app_test` | Schema used by database tests; must end with `_test`. |
+
+Frontend (`frontend/.env`, optional): `VITE_API_BASE_URL` (empty in development; set only if the API is on a different origin in production) and `API_PROXY_TARGET` (dev proxy target, default `http://localhost:3000`).
 
 - Never print, log or paste `.env` values (including in chat). Never ask the owner to paste a password.
 - Add every new variable to `src/config/env.ts` validation **and** to `.env.example` (with a placeholder).
@@ -402,6 +510,8 @@ Configured in `backend/api/.env` (never committed; template in `backend/api/.env
 
 - **The provider is not selected yet.** Do not pick one without the owner's approval.
 - Put SMS behind a **provider-agnostic interface** in the main backend's services layer (for example `send_sms(to, message)`). During development use a console/log implementation that does not send real SMS messages.
+- **Implemented (Phase 2):** `SmsSender` interface in `backend/api/src/services/sms/smsSender.ts`; `createSmsSender()` selects the implementation from `SMS_PROVIDER`. The only implementation is `MockSmsSender` (`SMS_PROVIDER=mock`), which **throws if created outside `NODE_ENV=development`**, prints `[MOCK SMS - NOT DELIVERED]` messages (including OTP codes) to the server console, and is announced with a warning at startup. There is **no silent fallback** to the mock. A real provider must implement `SmsSender` and be added to `createSmsSender()` and the `SMS_PROVIDER` validation; until then production cannot start. Tests inject their own fake sender.
+- Currently used only for the registration OTP.
 - Uses: registration OTP, report status changes (accepted/rejected/delayed), assignment, repair progress and completion.
 - Store mobile numbers in a single format (E.164 is suggested).
 - Rate-limit OTP and SMS sending to prevent abuse and cost overruns.
@@ -432,11 +542,13 @@ Configured in `backend/api/.env` (never committed; template in `backend/api/.env
   |---|---|
   | `npm run dev` | `tsx watch src/index.ts` — runs the API with auto-restart on changes (**no type checking**) |
   | `npm run typecheck` | `tsc --noEmit && tsc -p tests/tsconfig.json` — type-checks `src/` and `tests/` |
-  | `npm test` | `node --import tsx --test "tests/**/*.test.ts"` — runs all tests (no real database needed) |
+  | `npm test` | `node --import tsx --test --test-concurrency=1 "tests/**/*.test.ts"` — runs all tests; database tests use the `app_test` schema and are skipped (clearly reported) if `DATABASE_URL` is not configured |
   | `npm run build` | `prisma generate && tsc` — generates the Prisma client and compiles to `dist/` |
   | `npm start` | `node dist/index.js` — runs the compiled build (production) |
   | `npm run prisma:generate` | regenerates the Prisma client (`src/generated/prisma/`) |
   | `npm run prisma:validate` / `npm run prisma:format` | validates / formats `prisma/schema.prisma` |
+  | `npm run prisma:migrate:deploy` / `npm run prisma:migrate:status` | applies committed migrations (non-destructive) / shows migration status |
+  | `npm run admin:create` | creates the first admin (add `-- --additional` for more admins); production build: `node dist/scripts/createAdmin.js` |
   | `postinstall` (automatic) | runs `prisma generate` after `npm install` |
 
   Before considering work finished, run **`npm run typecheck`, `npm test` and `npm run build`**; `tsx` alone does not check types.
@@ -451,6 +563,8 @@ Configured in `backend/api/.env` (never committed; template in `backend/api/.env
 - Formatter/linter choice (for example Black/Ruff) to be agreed.
 
 ### Frontend (React)
+- **Language: TypeScript** (adopted in Phase 2) with the same strict flags as the backend (`frontend/tsconfig.json`). Node.js 24.
+- **Scripts** (inside `frontend/`): `npm run dev` (Vite on http://localhost:5173, proxies `/api`), `npm run typecheck` (`tsc --noEmit`), `npm run build` (typecheck + `vite build` → `frontend/dist/`, not in Git), `npm run preview`.
 - Function components and hooks. `PascalCase` component files, `camelCase` hooks starting with `use`.
 - Code for a feature lives in `features/<feature>/`. Only code that is truly shared goes in `components/`, `hooks/` and `utils/`.
 - Make all API calls through a single configured client in `lib/`.
@@ -467,7 +581,8 @@ Configured in `backend/api/.env` (never committed; template in `backend/api/.env
 - Use a restrictive CORS policy: list allowed frontend origins explicitly (implemented; see §7.6).
 - Security headers are set with Helmet; `X-Powered-By` is disabled. JSON request bodies are limited to 100 KB.
 - Validate uploads: type, size, random filename, no path traversal.
-- Rate-limit login, OTP and report submission.
+- Rate-limit login, OTP and report submission. (Login, registration and OTP limits are implemented, §7.2; report submission does not exist yet. The limiter is in-memory and per IP: it resets on restart, and behind a reverse proxy Express `trust proxy` must be configured first or all clients share one IP.)
+- Authentication cookies are httpOnly, SameSite and Secure in production; state-changing requests need a CSRF token (§7.2).
 - Escape user-generated content (chat, notes). Never insert raw HTML.
 - Do not include stack traces or internal details in API error responses.
 - Use HTTPS in deployment.
@@ -479,9 +594,13 @@ Configured in `backend/api/.env` (never committed; template in `backend/api/.env
 ## 12. Testing expectations
 
 - **Main backend:** tests currently use Node's built-in test runner (`node:test` + `node:assert`, run through `tsx`; no extra dependency) and `fetch` against the app started on a random port (`tests/helpers/testServer.ts`). Formal confirmation of the tool is still listed in §14. Unit tests for services (haversine/EXIF verification, assignment workload calculation, auth/role checks, and severity calculation if it lives here) and API tests. Use a separate PostgreSQL test database. Mock the AI service in main backend tests.
-- **Current main backend tests** (`backend/api/tests/`): health endpoints (200, 503 without leaking details, no database use for `/api/health`), Helmet headers, CORS (allowed/disallowed origins, preflights, exact matching), error handling (404, invalid JSON, payload too large, hidden/visible stack, `HttpError`) and environment validation. They use fake dependencies and **do not need a database**.
+- **Current main backend tests** (`backend/api/tests/`):
+  - Without a database: health endpoints (200, 503 without leaking details, no database use for `/api/health`), Helmet headers, CORS (allowed/disallowed origins, preflights, exact matching), error handling (404, invalid JSON, payload too large, hidden/visible stack, `HttpError`), environment validation and SMS sender selection.
+  - With the `app_test` schema (Phase 2): registration (normalization, hashing, duplicates, validation), OTP (success, reuse, wrong code, attempt limit, expiry, resend cooldown and hourly limit), login (unverified, wrong/unknown credentials, cookie flags, no secrets in responses), sessions (expiry, refresh rotation, reuse detection, logout), CSRF and origin rejection, profile and password change, rate limiting, admin authorization (citizen/engineer forbidden), engineer management (create, temporary password, list/search/filter, detail, update, deactivate/reactivate) and the admin bootstrap (duplicate prevention, concurrency).
+  - Fakes: `FakeSms` captures OTP messages; `TestClock` simulates expiry; the AI service is not involved yet.
+- **Frontend:** no automated tests yet (tool still undecided). Phase 2 was verified end to end through the Vite dev proxy with HTTP requests (pages served, all auth flows, cookies, roles); the UI has **not** been checked in a real browser by automated tests.
 - **AI service:** pytest is the *proposed* default (not yet confirmed). Mock the model in unit tests so they don't need `best.pt`. If inference integration tests exist, skip them clearly when the weights are missing.
-- **Frontend:** the testing tool (for example Vitest + React Testing Library) is to be agreed.
+- **Frontend testing tool:** still to be agreed (for example Vitest + React Testing Library).
 - Tests must never send real SMS messages or use production data.
 - Do not claim tests pass unless they were actually run.
 
@@ -510,18 +629,20 @@ Configured in `backend/api/.env` (never committed; template in `backend/api/.env
 - [ ] Engineer workload/availability formula
 - [ ] Priority definition (derived from severity? set manually by the admin?)
 - [ ] Duplicate-report detection rule (distance + time window?)
-- [ ] JWT storage and refresh strategy on the frontend
-- [ ] How the first admin account is created
 - [ ] Notification channel for admins and engineers (no in-app channel is confirmed)
-- [ ] Login identifier (mobile number + password proposed; email support undecided)
+- [ ] Email login / email field for accounts (mobile number + password is implemented)
+- [ ] Forgot-password / password-reset flow (not implemented; needs the SMS provider)
+- [ ] How engineers receive their temporary password (currently: admin sets it and shares it privately) — or an SMS/link-based account setup once SMS works
+- [ ] Admin management of citizen and admin accounts through the API (only engineer management is implemented)
+- [ ] Rate-limit storage and `trust proxy` setting for deployment (current limiter is in-memory, per IP)
 - [ ] Whether Reject and Delay require a reason (proposed)
 - [ ] Proposed convention to confirm: feature branches
 - [ ] Frontend state management and testing tools; main backend testing tool (`node:test` currently in use — confirm); AI service testing tool (pytest proposed)
-- [ ] Request validation library, WebSocket library and API documentation approach for the main backend
+- [ ] WebSocket library and API documentation approach for the main backend (request validation: zod, adopted in Phase 2)
 - [ ] How the main backend calls the AI service, and how the AI service is protected from public access
 - [ ] Which service computes severity (main backend or AI service)
 - [ ] Location storage in PostgreSQL (plain latitude/longitude columns or PostGIS)
-- [ ] Prisma migration workflow
+- [ ] Confirm the Prisma migration workflow (`migrate diff` + review + `migrate deploy` is in use because the DB user cannot create a shadow database, §7.1)
 - [ ] PostgreSQL hosting/deployment (for example local install, Docker or a managed service)
 - [ ] Python version and lint/format tooling
 - [ ] Deployment target

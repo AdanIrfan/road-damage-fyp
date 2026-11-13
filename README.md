@@ -8,7 +8,7 @@ A Final Year Project web application that connects three groups:
 
 A YOLOv8 model, already trained on the RDD2022 road damage dataset, will analyse each uploaded photograph. It returns the damage class, a confidence score and bounding boxes, which the system uses to make an initial severity estimate.
 
-> **Project status:** Early setup. The repository contains the folder structure and documentation only. **No application features are implemented yet.** Everything under "Planned features" describes what will be built.
+> **Project status:** Phase 2 — **authentication and user management are implemented** (backend + frontend). Road-damage reporting, AI inference, report review, repair workflows, chat, maps and analytics are **not implemented yet**; they are listed under "Planned features". See [What works today](#what-works-today).
 
 ## Purpose
 
@@ -24,14 +24,14 @@ Road damage is often reported late, through informal channels, or not at all. Th
 
 | Layer | Technology |
 |---|---|
-| Frontend | React + Vite |
-| Styling | Tailwind CSS |
-| Main backend | Node.js + Express.js (TypeScript) |
-| ORM | Prisma |
-| Database | PostgreSQL |
+| Frontend | React 19 + Vite 8 (TypeScript), React Router |
+| Styling | Tailwind CSS 4 |
+| Main backend | Node.js 24 + Express.js 5 (TypeScript) |
+| ORM | Prisma 7 |
+| Database | PostgreSQL 18 |
 | AI service | Python + FastAPI |
 | AI model | YOLOv8 + PyTorch (existing `best.pt`, inference only) |
-| Authentication | JWT |
+| Authentication | JWT in httpOnly cookies, refresh-token rotation, Argon2id passwords |
 | Charts | Recharts |
 | Maps | OpenStreetMap + Leaflet |
 | Real-time communication | WebSockets (admin–engineer chat) |
@@ -56,6 +56,20 @@ The application has three main parts:
 A typical report flows like this: the citizen submits a photo through the frontend → the main backend checks the location and sends the image to the AI service → the AI service returns detections → the main backend estimates severity, stores the report in PostgreSQL and shows the result to the citizen.
 
 > The exact way the main backend and the AI service communicate, and which service calculates severity, are **not decided yet**.
+
+## What works today
+
+**Authentication and user management (Phase 2):**
+
+- **Citizen registration** with full name, mobile number and password, then **mobile verification with a 6-digit SMS code (OTP)**. The account is only activated after verification.
+  - Codes expire after 10 minutes, allow 5 attempts, can be re-sent after 60 seconds (max 5 per hour), and are stored only as hashes.
+  - ⚠️ **No real SMS provider is connected yet.** In development the codes are printed to the backend console ("mock SMS"); nothing is sent to phones. The backend refuses to run in production until a real provider is added.
+- **Login / logout** with mobile number and password, for citizens, admins and engineers.
+- **Secure sessions:** short-lived access token and rotating refresh token, both in httpOnly cookies (never in `localStorage`); CSRF protection; rate limiting on login, registration and codes.
+- **Profiles:** every user can view their profile, change their name and change their password (which logs out their other devices).
+- **Admin:** the first admin is created with a command-line script (there is no public admin sign-up). Admins can **create engineer accounts** (with a temporary password the engineer must change), **list/search/filter** engineers, **view and edit** them, and **activate/deactivate** them (deactivation logs the engineer out immediately).
+- **Role-based access** enforced by the backend: citizens and engineers cannot use admin functions.
+- **Health checks:** `GET /api/health` and `GET /api/health/db`.
 
 ## Planned features
 
@@ -112,22 +126,23 @@ The first version estimates severity from detection information such as bounding
 road-damage-fyp/
 ├── CLAUDE.md          # Project guide: requirements, rules and open decisions
 ├── README.md
-├── frontend/          # React + Vite client
+├── frontend/          # React + Vite + Tailwind client (TypeScript)
+│   └── src/           # features/ (auth, admin, ...), pages/, layouts/, routes/, lib/api.ts
 ├── backend/
-│   ├── api/           # Node.js + Express main backend
-│   │   ├── src/       # Main backend source code
-│   │   ├── prisma/    # Prisma schema files
+│   ├── api/           # Node.js + Express main backend (TypeScript)
+│   │   ├── src/       # routes → controllers → services → Prisma
+│   │   ├── prisma/    # schema.prisma + migrations/
 │   │   ├── storage/uploads/  # Runtime uploads (not tracked in Git)
-│   │   └── tests/
-│   └── ai/            # Python + FastAPI AI inference service
-│       ├── app/       # FastAPI application source code
+│   │   └── tests/     # node:test suite
+│   └── ai/            # Python + FastAPI AI inference service (not started yet)
+│       ├── app/
 │       ├── weights/   # Location of best.pt (not tracked in Git)
 │       └── tests/
 ├── datasets/          # Dataset notes (data itself is not tracked in Git)
 └── docs/              # Project documentation
 ```
 
-`backend/api/package.json` and `backend/ai/requirements.txt` will be added when each service is set up.
+`backend/ai/requirements.txt` will be added when the AI service is set up.
 
 ## Model weights
 
@@ -137,15 +152,53 @@ The trained `best.pt` file is **not** in this repository. Its intended location 
 
 Some implementation details are still open, including:
 
-- SMS provider
+- SMS provider (required before production use)
 - How the main backend calls the AI service
-- How locations are stored in PostgreSQL, the Prisma migration workflow, and database hosting
-- JWT storage strategy on the frontend
+- How locations are stored in PostgreSQL, and database hosting
 - Severity, workload and duplicate-detection rules
-- Testing tools and deployment target
+- Frontend testing tool and deployment target
 
 The full list is in [`CLAUDE.md`](CLAUDE.md) (§14).
 
-## Setup
+## Local development setup
 
-Setup instructions will be added once the frontend, main backend and AI service are set up.
+### Prerequisites
+- **Node.js 24** and npm
+- **PostgreSQL 18** with a database and a dedicated user (this project uses `road_damage_db` and `road_damage_user`). The user does not need permission to create databases.
+
+### 1. Backend (`backend/api`)
+```bash
+cd backend/api
+npm install                 # also generates the Prisma client
+cp .env.example .env        # then edit .env (see below)
+npm run prisma:migrate:deploy   # creates the tables (non-destructive)
+npm run admin:create        # create the first admin account (asks for name, mobile, password)
+npm run dev                 # API on http://localhost:3000
+```
+
+In `backend/api/.env` set at least:
+- `DATABASE_URL` — replace `YOUR_PASSWORD` with your database user's password (URL-encode special characters).
+- `AUTH_SECRET` — a long random value, for example the output of `openssl rand -base64 48`.
+- `SMS_PROVIDER=mock` — development only; verification codes appear in the backend console.
+
+Never commit `.env`. See `backend/api/.env.example` for all options (CORS origins, default phone country, cookie SameSite).
+
+### 2. Frontend (`frontend`)
+```bash
+cd frontend
+npm install
+npm run dev                 # http://localhost:5173 (proxies /api to the backend)
+```
+
+Open http://localhost:5173, register as a citizen, read the 6-digit code from the backend console, verify, and log in. Log in with the admin account to manage engineers.
+
+### Checks
+```bash
+cd backend/api && npm run typecheck && npm test && npm run build
+cd frontend && npm run build
+```
+Backend database tests use a separate `app_test` schema in the same database and never touch your real tables.
+
+### Health endpoints
+- http://localhost:3000/api/health — API is running
+- http://localhost:3000/api/health/db — PostgreSQL is reachable

@@ -28,10 +28,10 @@ export function createCorsMiddleware(allowedOrigins: readonly string[]): Request
       }
     },
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
-    // Authorization is listed so the frontend can send JWTs once authentication exists.
-    allowedHeaders: ["Content-Type", "Authorization"],
-    // Allows cookies to be sent from the allowed origins, in case the (undecided) JWT
-    // storage strategy uses httpOnly cookies. Safe because origins are an explicit list.
+    // X-CSRF-Token carries the CSRF token for state-changing requests (see middleware/csrf.ts).
+    // Authorization is kept for possible non-browser clients; the web app uses cookies.
+    allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token"],
+    // Required: authentication uses httpOnly cookies. Safe because origins are an explicit list.
     credentials: true,
     maxAge: PREFLIGHT_MAX_AGE_SECONDS,
   });

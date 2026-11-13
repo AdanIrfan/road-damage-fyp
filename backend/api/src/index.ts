@@ -3,6 +3,8 @@ import { createApp } from "./app.js";
 import { EnvValidationError, loadEnvFile, parseEnv } from "./config/env.js";
 import { createPrismaClient, type PrismaClient } from "./db/prisma.js";
 import { createDatabaseHealthCheck } from "./services/health.service.js";
+import { createServices } from "./services/index.js";
+import { createSmsSender } from "./services/sms/index.js";
 
 /** Force the process to exit if a graceful shutdown takes longer than this. */
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -11,9 +13,24 @@ async function main(): Promise<void> {
   loadEnvFile();
   const env = parseEnv(process.env);
 
+  // Fails at startup (not on the first SMS) if the SMS configuration is not allowed.
+  const sms = createSmsSender(env);
   const prisma = createPrismaClient(env.databaseUrl);
+  const services = createServices({
+    prisma,
+    authSecret: env.authSecret,
+    sms,
+    phoneDefaultCountry: env.phoneDefaultCountry,
+  });
   const app = createApp(
-    { checkDatabase: createDatabaseHealthCheck(prisma) },
+    {
+      checkDatabase: createDatabaseHealthCheck(prisma),
+      v1: {
+        services,
+        cookies: { secure: env.nodeEnv === "production", sameSite: env.cookieSameSite },
+        rateLimiting: env.nodeEnv !== "test",
+      },
+    },
     {
       exposeErrorStack: env.nodeEnv === "development",
       logRequests: env.nodeEnv !== "test",
@@ -31,6 +48,9 @@ async function main(): Promise<void> {
 
   console.log(`API listening on http://localhost:${env.port} (${env.nodeEnv})`);
   console.log(`CORS allowed origins: ${env.corsOrigins.join(", ")}`);
+  if (sms.providerName === "mock") {
+    console.warn("SMS_PROVIDER=mock: SMS messages are NOT delivered; codes are printed to this console.");
+  }
   registerShutdownHandlers(server, prisma);
 }
 

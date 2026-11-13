@@ -3,8 +3,8 @@
 // prisma.config.ts, and the app connects through the PrismaPg driver adapter
 // (see src/db/prisma.ts).
 //
-// No models yet. Application models (users, reports, ...) will be added once
-// they are designed and approved.
+// Phase 2 (authentication and user management): users, OTP codes, refresh tokens.
+// Models for later phases (reports, assignments, messages, ...) are NOT added yet.
 
 generator client {
   provider     = "prisma-client"
@@ -14,4 +14,92 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+enum UserRole {
+  CITIZEN
+  ADMIN
+  ENGINEER
+}
+
+enum AccountStatus {
+  /// Citizen registered but has not verified their mobile number yet. Cannot log in.
+  PENDING_VERIFICATION
+  ACTIVE
+  /// Disabled by an admin (or never activated). Cannot log in; sessions are revoked.
+  DEACTIVATED
+}
+
+enum OtpPurpose {
+  MOBILE_VERIFICATION
+}
+
+model User {
+  id                 String        @id @default(uuid()) @db.Uuid
+  fullName           String        @map("full_name") @db.VarChar(100)
+  /// E.164 format, e.g. +15551234567. Used as the login identifier.
+  mobileNumber       String        @unique @map("mobile_number") @db.VarChar(20)
+  /// Argon2id hash. Never returned by the API.
+  passwordHash       String        @map("password_hash")
+  role               UserRole
+  status             AccountStatus
+  mobileVerifiedAt   DateTime?     @map("mobile_verified_at") @db.Timestamptz(3)
+  /// True for accounts with an admin-set temporary password (engineers, bootstrap admins).
+  mustChangePassword Boolean       @default(false) @map("must_change_password")
+  /// Admin who created this account (engineers). Null for self-registered citizens and the first admin.
+  createdById        String?       @map("created_by_id") @db.Uuid
+  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  createdBy     User?          @relation("UserCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdUsers  User[]         @relation("UserCreatedBy")
+  otpCodes      OtpCode[]
+  refreshTokens RefreshToken[]
+
+  @@index([role, status])
+  @@index([createdAt])
+  @@map("users")
+}
+
+model OtpCode {
+  id         String     @id @default(uuid()) @db.Uuid
+  userId     String     @map("user_id") @db.Uuid
+  purpose    OtpPurpose
+  /// HMAC-SHA256 of the code (keyed with a server secret). The code itself is never stored.
+  codeHash   String     @map("code_hash") @db.VarChar(64)
+  expiresAt  DateTime   @map("expires_at") @db.Timestamptz(3)
+  /// Number of failed verification attempts for this code.
+  attempts   Int        @default(0)
+  /// Set when the code is used successfully or superseded; a consumed code can never be used again.
+  consumedAt DateTime?  @map("consumed_at") @db.Timestamptz(3)
+  createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose, createdAt])
+  @@map("otp_codes")
+}
+
+model RefreshToken {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  /// SHA-256 of the random refresh token. The token itself is only ever in the client's cookie.
+  tokenHash    String    @unique @map("token_hash") @db.VarChar(64)
+  /// All tokens created by rotating one login session share a family. Reuse of a rotated
+  /// token revokes the whole family.
+  familyId     String    @map("family_id") @db.Uuid
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(3)
+  /// The token that replaced this one during rotation.
+  replacedById String?   @unique @map("replaced_by_id") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacedBy RefreshToken? @relation("RefreshTokenRotation", fields: [replacedById], references: [id], onDelete: SetNull)
+  replaces   RefreshToken? @relation("RefreshTokenRotation")
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
 }

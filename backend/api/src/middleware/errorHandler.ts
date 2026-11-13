@@ -12,6 +12,7 @@ interface NormalizedError {
   statusCode: number;
   code: string;
   message: string;
+  details?: Record<string, unknown>;
 }
 
 const INTERNAL_ERROR: NormalizedError = {
@@ -37,6 +38,9 @@ export function createErrorHandler(options: ErrorHandlerOptions): ErrorRequestHa
     }
 
     const details: ApiErrorDetails = { code: normalized.code, message: normalized.message };
+    if (normalized.details !== undefined) {
+      details.details = normalized.details;
+    }
     // Stacks only help with unexpected (5xx) errors; expected 4xx errors never include one.
     if (options.exposeStack && normalized.statusCode >= 500 && err instanceof Error && err.stack !== undefined) {
       details.stack = err.stack;
@@ -48,7 +52,11 @@ export function createErrorHandler(options: ErrorHandlerOptions): ErrorRequestHa
 
 function normalizeError(err: unknown): NormalizedError {
   if (err instanceof HttpError) {
-    return { statusCode: err.statusCode, code: err.code, message: err.message };
+    const normalized: NormalizedError = { statusCode: err.statusCode, code: err.code, message: err.message };
+    if (err.details !== undefined) {
+      normalized.details = err.details;
+    }
+    return normalized;
   }
 
   // Errors raised by express.json() (body-parser) carry a `type` and `status`.

@@ -8,6 +8,8 @@ export interface ApiSuccessResponse<T> {
 export interface ApiErrorDetails {
   code: string;
   message: string;
+  /** Safe, structured extra information (e.g. validation messages per field). */
+  details?: Record<string, unknown>;
   stack?: string;
 }
 

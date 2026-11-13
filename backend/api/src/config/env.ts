@@ -1,6 +1,10 @@
 import { existsSync } from "node:fs";
+import { isSupportedCountry, type CountryCode } from "libphonenumber-js/max";
 
 export type NodeEnv = "development" | "production" | "test";
+export type CookieSameSite = "lax" | "strict" | "none";
+/** SMS providers that are actually implemented. Only "mock" exists so far (development only). */
+export type SmsProviderName = "mock";
 
 export interface Env {
   nodeEnv: NodeEnv;
@@ -8,11 +12,21 @@ export interface Env {
   databaseUrl: string;
   /** Browser origins allowed to call the API (CORS). Never contains "*". */
   corsOrigins: readonly string[];
+  /** Master secret for JWT signing, OTP hashing and CSRF tokens (keys are derived from it). */
+  authSecret: string;
+  /** Undefined only in the test environment, where tests inject their own SMS sender. */
+  smsProvider: SmsProviderName | undefined;
+  /** ISO 3166 country used when a mobile number is entered without +country code. */
+  phoneDefaultCountry: CountryCode | undefined;
+  cookieSameSite: CookieSameSite;
 }
 
 const NODE_ENVS: readonly NodeEnv[] = ["development", "production", "test"];
 const DEFAULT_PORT = "3000";
 const PLACEHOLDER_PASSWORD = "YOUR_PASSWORD";
+const PLACEHOLDER_SECRET = "CHANGE_ME";
+const MIN_AUTH_SECRET_LENGTH = 32;
+const COOKIE_SAME_SITE_VALUES: readonly CookieSameSite[] = ["lax", "strict", "none"];
 /** Vite dev server. Used only outside production when CORS_ORIGIN is not set. */
 const DEFAULT_DEV_CORS_ORIGINS: readonly string[] = ["http://localhost:5173"];
 
@@ -66,11 +80,73 @@ export function parseEnv(source: NodeJS.ProcessEnv): Env {
 
   const corsOrigins = parseCorsOrigins(source["CORS_ORIGIN"], nodeEnv, problems);
 
-  if (problems.length > 0 || nodeEnv === undefined || databaseUrl === undefined) {
+  const authSecret = source["AUTH_SECRET"] ?? "";
+  if (authSecret === "") {
+    problems.push("AUTH_SECRET is required (generate one with: openssl rand -base64 48)");
+  } else if (authSecret.includes(PLACEHOLDER_SECRET)) {
+    problems.push(`AUTH_SECRET still contains the placeholder ${PLACEHOLDER_SECRET}; generate a real secret`);
+  } else if (authSecret.length < MIN_AUTH_SECRET_LENGTH) {
+    problems.push(`AUTH_SECRET must be at least ${MIN_AUTH_SECRET_LENGTH} characters long`);
+  }
+
+  const smsProvider = parseSmsProvider(source["SMS_PROVIDER"], nodeEnv, problems);
+
+  const rawCountry = source["PHONE_DEFAULT_COUNTRY"]?.trim().toUpperCase() ?? "";
+  let phoneDefaultCountry: CountryCode | undefined;
+  if (rawCountry !== "") {
+    if (isSupportedCountry(rawCountry)) {
+      phoneDefaultCountry = rawCountry;
+    } else {
+      problems.push("PHONE_DEFAULT_COUNTRY must be a two-letter ISO country code such as GB or US");
+    }
+  }
+
+  const rawSameSite = (source["COOKIE_SAMESITE"] ?? "lax").trim().toLowerCase();
+  const cookieSameSite = COOKIE_SAME_SITE_VALUES.find((value) => value === rawSameSite);
+  if (cookieSameSite === undefined) {
+    problems.push(`COOKIE_SAMESITE must be one of: ${COOKIE_SAME_SITE_VALUES.join(", ")}`);
+  } else if (cookieSameSite === "none" && nodeEnv !== "production") {
+    problems.push("COOKIE_SAMESITE=none requires secure cookies, which are only enabled when NODE_ENV=production");
+  }
+
+  if (problems.length > 0 || nodeEnv === undefined || databaseUrl === undefined || cookieSameSite === undefined) {
     throw new EnvValidationError(problems);
   }
 
-  return { nodeEnv, port, databaseUrl, corsOrigins };
+  return { nodeEnv, port, databaseUrl, corsOrigins, authSecret, smsProvider, phoneDefaultCountry, cookieSameSite };
+}
+
+/**
+ * SMS_PROVIDER selects how OTP messages are delivered.
+ * - "mock" prints messages to the console instead of sending them. Allowed ONLY in development.
+ * - No real provider is implemented yet, so production refuses to start rather than silently
+ *   pretending to deliver SMS.
+ * - In the test environment it may be unset (tests inject a fake sender).
+ */
+function parseSmsProvider(
+  raw: string | undefined,
+  nodeEnv: NodeEnv | undefined,
+  problems: string[],
+): SmsProviderName | undefined {
+  const value = raw?.trim().toLowerCase() ?? "";
+  if (value === "") {
+    if (nodeEnv !== "test") {
+      problems.push(
+        nodeEnv === "production"
+          ? "SMS_PROVIDER is required in production, but no real SMS provider is implemented yet"
+          : "SMS_PROVIDER is required (use SMS_PROVIDER=mock in development)",
+      );
+    }
+    return undefined;
+  }
+  if (value === "mock") {
+    if (nodeEnv !== "development") {
+      problems.push("SMS_PROVIDER=mock is only allowed when NODE_ENV=development");
+    }
+    return "mock";
+  }
+  problems.push(`SMS_PROVIDER "${value}" is not implemented (available: mock, development only)`);
+  return undefined;
 }
 
 /**
