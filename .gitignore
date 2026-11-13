@@ -1,0 +1,109 @@
+# ============================================================
+# Road Damage FYP - .gitignore
+# ============================================================
+
+# ---------- Environment files / secrets ----------
+.env
+.env.*
+!.env.example
+*.env
+*.pem
+*.key
+secrets/
+
+# Credential files (only these names; other JSON files are NOT ignored)
+credentials.json
+*credentials*.json
+*service-account*.json
+*service_account*.json
+*serviceAccount*.json
+client_secret*.json
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.ipynb_checkpoints/
+
+# Python virtual environments
+venv/
+.venv/
+env/
+ENV/
+virtualenv/
+
+# ---------- Node / frontend ----------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+.vite/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# ---------- Runtime uploads (may contain sensitive images/location data) ----------
+backend/api/storage/uploads/*
+!backend/api/storage/uploads/.gitkeep
+
+# ---------- Model weights (not stored in Git by default) ----------
+backend/ai/weights/*
+!backend/ai/weights/.gitkeep
+*.pt
+*.pth
+*.onnx
+*.engine
+*.ckpt
+*.safetensors
+
+# YOLO / Ultralytics run outputs
+runs/
+
+# ---------- Datasets (large files are not stored in Git) ----------
+datasets/*
+!datasets/dataset_notes.md
+
+# Dataset archives anywhere in the repository
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# ---------- Local database files ----------
+*.db
+*.sqlite
+*.sqlite3
+
+# ---------- Logs and temporary files ----------
+logs/
+*.log
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+*.swo
+*~
+
+# ---------- OS / editor ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
