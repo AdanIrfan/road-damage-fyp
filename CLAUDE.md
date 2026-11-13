@@ -156,7 +156,7 @@ Report status and engineer repair status are **separate fields**. Never merge th
 |---|---|
 | Frontend | React + Vite |
 | Styling | Tailwind CSS |
-| Main backend | Node.js + Express.js |
+| Main backend | Node.js + Express.js (TypeScript) |
 | ORM | Prisma |
 | Database | PostgreSQL |
 | AI service | Python + FastAPI, YOLOv8 (Ultralytics) + PyTorch |
@@ -336,9 +336,13 @@ Expectations:
 - No hard-coded configuration or secrets. Use environment variables with a committed `.env.example`.
 - Comment *why*, not *what*.
 
-### Main backend (Node.js + Express)
-- JavaScript or TypeScript is to be agreed.
-- `camelCase` for functions and variables, `PascalCase` for classes.
+### Main backend (Node.js + Express, TypeScript)
+- **Language: TypeScript** (confirmed). Do not write main backend code in plain JavaScript.
+- Give explicit types to function parameters and return values, request and response shapes, and service interfaces. Define shared types in one place instead of repeating them.
+- Avoid unnecessary `any`. When a value's type is genuinely unknown, use `unknown` and narrow it before use.
+- Use Prisma's generated types for database models instead of redefining them by hand.
+- TypeScript compiler settings (for example strict mode) are to be agreed.
+- `camelCase` for functions and variables, `PascalCase` for classes, interfaces and types.
 - Keep routes thin; business logic lives in services. All database access goes through Prisma.
 - The ESLint/Prettier setup is to be agreed.
 
@@ -413,7 +417,6 @@ Expectations:
 - [ ] Whether Reject and Delay require a reason (proposed)
 - [ ] Proposed conventions to confirm: `/api/v1` prefix, feature branches
 - [ ] Frontend state management and testing tools; main backend testing tool; AI service testing tool (pytest proposed)
-- [ ] JavaScript or TypeScript for the main backend
 - [ ] Request validation library, WebSocket library and API documentation approach for the main backend
 - [ ] How the main backend calls the AI service, and how the AI service is protected from public access
 - [ ] Which service computes severity (main backend or AI service)

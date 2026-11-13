@@ -26,7 +26,7 @@ Road damage is often reported late, through informal channels, or not at all. Th
 |---|---|
 | Frontend | React + Vite |
 | Styling | Tailwind CSS |
-| Main backend | Node.js + Express.js |
+| Main backend | Node.js + Express.js (TypeScript) |
 | ORM | Prisma |
 | Database | PostgreSQL |
 | AI service | Python + FastAPI |
