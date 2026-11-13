@@ -1,0 +1,10 @@
+{
+  // Type-checks the tests together with the source, using the same strict settings.
+  // Tests are run by tsx and never compiled to dist/.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "noEmit": true
+  },
+  "include": ["./**/*.ts", "../src/**/*.ts"]
+}

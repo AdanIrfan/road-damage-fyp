@@ -1,0 +1,17 @@
+// Prisma schema for the main backend.
+// Prisma 7: the database URL is NOT set here. The CLI reads it from
+// prisma.config.ts, and the app connects through the PrismaPg driver adapter
+// (see src/db/prisma.ts).
+//
+// No models yet. Application models (users, reports, ...) will be added once
+// they are designed and approved.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}

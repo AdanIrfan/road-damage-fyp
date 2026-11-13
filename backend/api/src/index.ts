@@ -1,0 +1,95 @@
+import { createServer, type Server } from "node:http";
+import { createApp } from "./app.js";
+import { EnvValidationError, loadEnvFile, parseEnv } from "./config/env.js";
+import { createPrismaClient, type PrismaClient } from "./db/prisma.js";
+import { createDatabaseHealthCheck } from "./services/health.service.js";
+
+/** Force the process to exit if a graceful shutdown takes longer than this. */
+const SHUTDOWN_TIMEOUT_MS = 10_000;
+
+async function main(): Promise<void> {
+  loadEnvFile();
+  const env = parseEnv(process.env);
+
+  const prisma = createPrismaClient(env.databaseUrl);
+  const app = createApp(
+    { checkDatabase: createDatabaseHealthCheck(prisma) },
+    {
+      exposeErrorStack: env.nodeEnv === "development",
+      logRequests: env.nodeEnv !== "test",
+      corsOrigins: env.corsOrigins,
+    },
+  );
+  const server = createServer(app);
+
+  try {
+    await listen(server, env.port);
+  } catch (error) {
+    await prisma.$disconnect();
+    throw error;
+  }
+
+  console.log(`API listening on http://localhost:${env.port} (${env.nodeEnv})`);
+  console.log(`CORS allowed origins: ${env.corsOrigins.join(", ")}`);
+  registerShutdownHandlers(server, prisma);
+}
+
+function listen(server: Server, port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+}
+
+function registerShutdownHandlers(server: Server, prisma: PrismaClient): void {
+  let shuttingDown = false;
+
+  const shutdown = (signal: NodeJS.Signals): void => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+    console.log(`${signal} received, shutting down...`);
+
+    const forceExit = setTimeout(() => {
+      console.error("Shutdown timed out; forcing exit.");
+      process.exit(1);
+    }, SHUTDOWN_TIMEOUT_MS);
+    forceExit.unref();
+
+    // Stop accepting connections, wait for in-flight requests, then close the database pool.
+    server.close((closeError) => {
+      prisma
+        .$disconnect()
+        .catch((disconnectError: unknown) => {
+          console.error("Error while disconnecting Prisma:", disconnectError);
+          process.exitCode = 1;
+        })
+        .finally(() => {
+          if (closeError !== undefined) {
+            console.error("Error while closing the HTTP server:", closeError);
+            process.exitCode = 1;
+          }
+          console.log("Shutdown complete.");
+          clearTimeout(forceExit);
+        });
+    });
+    // Idle keep-alive connections would otherwise delay server.close().
+    server.closeIdleConnections();
+  };
+
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+}
+
+main().catch((error: unknown) => {
+  if (error instanceof EnvValidationError) {
+    console.error(error.message);
+  } else {
+    console.error("Failed to start the API server:", error);
+  }
+  process.exitCode = 1;
+});

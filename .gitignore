@@ -57,6 +57,9 @@ dist/
 build/
 *.tsbuildinfo
 
+# Prisma generated client (recreated by `prisma generate`)
+backend/api/src/generated/
+
 # ---------- Runtime uploads (may contain sensitive images/location data) ----------
 backend/api/storage/uploads/*
 !backend/api/storage/uploads/.gitkeep
