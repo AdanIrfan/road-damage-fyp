@@ -292,6 +292,19 @@ describe("authentication", { skip: skipWithoutDatabase }, () => {
       assert.equal(active, 0);
     });
 
+    it("treats two simultaneous refreshes with the same token as reuse (why the frontend serialises refreshes across tabs)", async () => {
+      const tabA = await createVerifiedCitizen(ctx);
+      // A second browser tab shares the same cookies.
+      const tabB = ctx.client();
+      for (const [name, value] of tabA.cookies) {
+        tabB.cookies.set(name, value);
+      }
+      const [a, b] = await Promise.all([tabA.post("/api/v1/auth/refresh"), tabB.post("/api/v1/auth/refresh")]);
+      assert.deepEqual([a.status, b.status].sort(), [200, 401]);
+      // Theft detection is unchanged: the whole session is revoked, so the user would be logged out.
+      assert.equal(await db.prisma.refreshToken.count({ where: { revokedAt: null } }), 0);
+    });
+
     it("rejects refresh without a cookie or with an unknown token", async () => {
       const none = await ctx.client().post("/api/v1/auth/refresh");
       assert.equal(none.status, 401);

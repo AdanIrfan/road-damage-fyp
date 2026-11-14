@@ -5,6 +5,7 @@
  *   JavaScript and are never stored in localStorage.
  * - State-changing requests send the CSRF token (kept in memory) in X-CSRF-Token.
  * - On 401 the client tries one silent session refresh and retries the request once.
+ * - Bodies are JSON, or multipart FormData for uploads (the browser sets the boundary).
  */
 
 const API_BASE_URL: string = (import.meta.env["VITE_API_BASE_URL"] as string | undefined) ?? "";
@@ -54,9 +55,10 @@ export function onSessionEnded(listener: () => void): () => void {
   return () => sessionEndedListeners.delete(listener);
 }
 
-async function send(method: string, path: string, body: unknown, csrf: string | undefined): Promise<Response> {
-  const headers: Record<string, string> = { Accept: "application/json" };
-  if (body !== undefined) {
+async function send(method: string, path: string, body: unknown, csrf: string | undefined, accept = "application/json"): Promise<Response> {
+  const headers: Record<string, string> = { Accept: accept };
+  const isForm = body instanceof FormData;
+  if (body !== undefined && !isForm) {
     headers["Content-Type"] = "application/json";
   }
   if (csrf !== undefined) {
@@ -67,7 +69,7 @@ async function send(method: string, path: string, body: unknown, csrf: string | 
       method,
       headers,
       credentials: "include",
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      ...(body === undefined ? {} : { body: isForm ? body : JSON.stringify(body) }),
     });
   } catch {
     throw new ApiError(0, "NETWORK_ERROR", "Cannot reach the server. Check your connection and try again.");
@@ -109,20 +111,56 @@ async function getCsrfToken(): Promise<string> {
   return csrfRequest;
 }
 
-/** Refreshes the session once; concurrent callers share the same attempt (refresh tokens are single-use). */
+/** Name of the browser-wide lock that serialises session refreshes across tabs. */
+const REFRESH_LOCK = "road-damage-session-refresh";
+
+/**
+ * Refreshes the session once; concurrent callers in this tab share the same attempt.
+ *
+ * Refresh tokens are single-use and the server treats a reused one as theft (it revokes the whole
+ * session). All tabs share the same cookies, so two tabs refreshing at the same moment would send
+ * the same token and log the user out everywhere. A Web Lock makes tabs refresh one at a time, and
+ * a tab that had to wait first checks whether the other tab's refresh already renewed the session.
+ */
 export function refreshSession(): Promise<boolean> {
-  refreshRequest ??= (async () => {
+  refreshRequest ??= withRefreshLock(async (waitedForAnotherTab) => {
     try {
+      if (waitedForAnotherTab && (await sessionIsValid())) {
+        return true;
+      }
       const response = await send("POST", "/api/v1/auth/refresh", {}, await getCsrfToken());
       await parse<unknown>(response);
       return true;
     } catch {
       return false;
     }
-  })().finally(() => {
+  }).finally(() => {
     refreshRequest = undefined;
   });
   return refreshRequest;
+}
+
+async function withRefreshLock(task: (waitedForAnotherTab: boolean) => Promise<boolean>): Promise<boolean> {
+  const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
+  if (locks === undefined) {
+    // Very old browsers: no cross-tab coordination, same behaviour as before.
+    return task(false);
+  }
+  const immediate = await locks.request(REFRESH_LOCK, { ifAvailable: true }, (lock) => (lock === null ? undefined : task(false)));
+  if (immediate !== undefined) {
+    return immediate;
+  }
+  // Another tab is refreshing right now: wait for it, then re-check before refreshing ourselves.
+  return locks.request(REFRESH_LOCK, () => task(true));
+}
+
+/** True if the current cookies already carry a valid session (e.g. renewed by another tab). */
+async function sessionIsValid(): Promise<boolean> {
+  try {
+    return (await send("GET", "/api/v1/auth/me", undefined, undefined)).ok;
+  } catch {
+    return false;
+  }
 }
 
 export async function apiRequest<T>(method: string, path: string, body?: unknown, attempt = 0): Promise<T> {
@@ -153,7 +191,29 @@ export const api = {
   get: <T>(path: string) => apiRequest<T>("GET", path),
   post: <T>(path: string, body?: unknown) => apiRequest<T>("POST", path, body),
   patch: <T>(path: string, body?: unknown) => apiRequest<T>("PATCH", path, body),
+  /** multipart/form-data upload (CSRF token and session refresh handled like any POST). */
+  postForm: <T>(path: string, form: FormData) => apiRequest<T>("POST", path, form),
 };
+
+/**
+ * Downloads a protected binary resource (e.g. a report photo) with the session cookie and
+ * returns it as a Blob. Refreshes the session once on 401, like apiRequest.
+ */
+export async function apiBlob(path: string, attempt = 0): Promise<Blob> {
+  const response = await send("GET", path, undefined, undefined, "image/*");
+  if (response.ok) {
+    return response.blob();
+  }
+  if (response.status === 401 && attempt === 0) {
+    if (await refreshSession()) {
+      return apiBlob(path, attempt + 1);
+    }
+    sessionEndedListeners.forEach((listener) => listener());
+  }
+  // parse() throws the server's ApiError (e.g. 404 IMAGE_NOT_FOUND) for error responses.
+  await parse<unknown>(response);
+  throw new ApiError(response.status, "UNKNOWN_ERROR", "The image could not be loaded.");
+}
 
 /** Friendly message for any thrown value. */
 export function errorMessage(error: unknown): string {

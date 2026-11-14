@@ -2,10 +2,12 @@
 
 **Project:** AI-Powered Road Infrastructure Damage Detection, Severity Assessment and Maintenance Management System
 **Type:** Final Year Project (FYP)
-**Status:** Phase 2 (authentication and user management) implemented.
+**Status:** Phase 3 (citizen reporting and AI integration) implemented.
 - **Phase 1 — backend foundation:** Express + TypeScript + Prisma, health endpoints, CORS, error handling, tests.
 - **Phase 2 — authentication and user management:** citizen registration with SMS OTP verification (mock SMS in development only), login/logout, cookie-based JWT sessions with refresh-token rotation, CSRF protection, role-based authorization, admin bootstrap CLI, admin engineer management, and the React frontend for all of these.
-- **Not implemented yet:** road-damage reports, AI inference (the AI service has not been started), admin report review, engineer repair workflows, chat, maps, analytics, notifications other than the OTP SMS, and a real SMS provider.
+- **Phase 3 — citizen reporting and AI integration:** report submission (live camera + browser GPS, or gallery upload + map pick), secure image storage (private original + metadata-free display copy), EXIF location verification, the Python + FastAPI AI service running the trained `best.pt`, Node-side estimated severity, the citizen dashboard (list, summary, detail with detection boxes and map), and tests (2026-11-14).
+- **Not implemented yet:** admin report review (accept/reject/delay, severity correction, admin report list), assignment, engineer repair workflows, chat, analytics, notifications other than the OTP SMS, duplicate detection, and a real SMS provider.
+- **Model validation status:** only the `pothole` class has been exercised with a real photo (one Wikimedia Commons image, detected at confidence ≈ 0.69). `longitudinal_crack`, `transverse_crack` and `alligator_crack` have **not** been tested yet; they will be tested later with the owner's RDD2022 data. Never claim the model is validated for all four classes.
 
 This file is the main reference for anyone (human or AI) working in this repository. If anything here conflicts with an explicit instruction from the project owner, the owner's instruction wins. Update this file when decisions are made.
 
@@ -115,6 +117,14 @@ Implementation details (Phase 2):
 5. The citizen sees the damage class, confidence and estimated severity.
 6. The report is saved with status `submitted`.
 
+Implementation details (Phase 3):
+- **One photo per report**, JPEG or PNG only (detected from the file content, not the name/MIME type), max **10 MB**, longest side max **8000 px**. HEIC is not supported. Optional description, max 1000 characters.
+- The backend keeps the **original upload** (with EXIF) privately and creates a **display copy**: EXIF orientation applied, re-encoded as JPEG, all metadata (including GPS) removed. Only the display copy is served and sent to the AI service, so AI boxes are in display-image pixels.
+- EXIF GPS is read from the original (gallery uploads only). Thresholds: `EXIF_LOCATION_TOLERANCE_KM` (default **2 km**), `GPS_ACCURACY_THRESHOLD_METERS` (default **100 m**). A 0,0 EXIF position is treated as "no metadata".
+- **If the AI service fails** (unavailable, timeout, rejected, invalid response) the report is **still saved** with `aiStatus = FAILED`, no detections and no severity. Nothing is ever faked.
+- Submission is limited to **10 reports per hour per citizen** (keyed by user id, in memory).
+- Every new report gets a `report_status_history` row (`null → SUBMITTED`, changed by the citizen).
+
 ### 3.3 Admin review
 1. An admin views a list of reports and can search, filter and sort it (see §7.3).
 2. An admin opens a report and sees the photo(s), AI detections, location verification result and a map location. Opening a report to look at it does **not** change its status.
@@ -185,6 +195,11 @@ Added in Phase 2 (authentication):
 - **Main backend:** `zod` (request validation), `@node-rs/argon2` (Argon2id password hashing), `jose` (JWT), `cookie-parser`, `express-rate-limit`, `libphonenumber-js` (mobile number validation/E.164).
 - **Frontend (TypeScript):** `react` 19, `react-dom`, `react-router` 8 (declarative routing), `vite` 8, `@vitejs/plugin-react`, `tailwindcss` 4 with `@tailwindcss/vite`, `typescript`.
 
+Added in Phase 3 (approved 2026-11-14):
+- **Main backend:** `multer` (multipart uploads, memory storage with limits), `exifr` (EXIF GPS), `sharp` (metadata-free JPEG display copy). File type is checked with our own magic-byte check.
+- **Frontend:** `leaflet` + `react-leaflet` (OpenStreetMap maps), `@types/leaflet`.
+- **AI service (Python 3.12.16, managed with `uv`, venv `backend/ai/.venv`):** `torch 2.15.0+cpu`, `torchvision 0.29.2+cpu` (CPU-only wheels), `ultralytics 8.4.212`, `fastapi 0.162.7`, `starlette 1.10.0`, `uvicorn 0.54.0`, `python-multipart`, `pydantic`, `pydantic-settings`, `pillow`, `numpy`; tests: `pytest`, `httpx`. Exact pins are in `backend/ai/requirements.txt` / `requirements-dev.txt`. (Starlette warns that its test client prefers `httpx2`; `httpx` still works.)
+
 Library choices not listed here (for example the request validation library, the WebSocket library, the EXIF library, password hashing, or frontend state management) must be **proposed to the owner and approved** before use.
 
 ---
@@ -217,17 +232,36 @@ road-damage-fyp/
 │   │   ├── prisma.config.ts Prisma CLI configuration
 │   │   ├── .env.example     environment template (real .env is NOT in Git)
 │   │   └── package.json
-│   └── ai/                  Python + FastAPI AI inference service
+│   └── ai/                  Python + FastAPI AI inference service (see "AI service layout" below)
 │       ├── app/             FastAPI application source code
 │       ├── weights/         best.pt (NOT in Git)
-│       ├── tests/
-│       └── requirements.txt (not created yet)
+│       ├── tests/           pytest (fake detector + one real-model test skipped without best.pt)
+│       ├── requirements.txt / requirements-dev.txt   pinned dependencies
+│       ├── .env.example     environment template (real .env is NOT in Git)
+│       └── .venv/           Python 3.12.16 virtual environment (NOT in Git)
 │
 ├── datasets/            dataset_notes.md only (data NOT in Git)
 └── docs/                project documentation
 ```
 
-> **Backend layout (approved):** `backend/api/` is the Node.js + Express main backend (Prisma, PostgreSQL access, uploads and business logic). `backend/ai/` is the Python + FastAPI AI inference service. `backend/ai/requirements.txt` will be created when the AI service is set up. The internal layout of `backend/ai/app/` is still to be agreed. Do not restructure these folders without the owner's approval.
+> **Backend layout (approved):** `backend/api/` is the Node.js + Express main backend (Prisma, PostgreSQL access, uploads and business logic). `backend/ai/` is the Python + FastAPI AI inference service. Do not restructure these folders without the owner's approval.
+
+### AI service layout (`backend/ai/`, Phase 3)
+```text
+app/
+├── main.py       create_app(settings, detector): lifespan loads the model ONCE; GET /health, POST /v1/detect
+├── config.py     Settings (pydantic-settings, prefix AI_, reads backend/ai/.env); invalid config stops startup
+├── detector.py   Detector protocol + YoloDetector (Ultralytics; class names read from the model; missing weights → ModelLoadError)
+├── images.py     decode JPEG/PNG with Pillow (pixel limit, EXIF orientation, RGB)
+├── security.py   X-AI-Service-Key check (hmac.compare_digest)
+├── schemas.py    Pydantic response models
+└── errors.py     {"error": {"code", "message"}} responses, no internal details
+```
+- Run (from `backend/ai/`): `.venv/bin/uvicorn --factory app.main:create_app --host 127.0.0.1 --port 8000`. Bound to localhost by default.
+- Tests: `.venv/bin/python -m pytest` (from `backend/ai/`).
+- Install: `uv pip install --python .venv/bin/python -r requirements-dev.txt`. uv is installed in `~/.local/bin`.
+- Inference runs in a worker thread behind a lock (one inference at a time); the model is warmed up at startup. `YOLO_OFFLINE=1` is set so Ultralytics makes no network calls.
+- The service key is checked **before** the multipart body is read, so unauthenticated uploads are never parsed.
 
 ### Main backend layout (`backend/api/`, current)
 ```text
@@ -238,11 +272,12 @@ src/
 │   ├── env.ts             .env loading and environment validation
 │   └── auth.ts            auth constants (token lifetimes, OTP limits, cookie names)
 ├── db/prisma.ts           Prisma client factory (PrismaPg adapter); one client is created in index.ts and injected
+├── config/reports.ts      upload limits, report rate limit, SEVERITY_CONFIG (the single severity formula config)
 ├── routes/
 │   ├── index.ts           everything under /api (health + /v1)
 │   ├── health.routes.ts   /api/health, /api/health/db
 │   └── v1/index.ts        /api/v1 router: auth, profile and admin routes (all application routes go here)
-├── controllers/           request/response handling (thin): auth, profile, engineers, health
+├── controllers/           request/response handling (thin): auth, profile, engineers, reports, health
 ├── services/              business logic and database access
 │   ├── index.ts           createServices(): wires all services (used by index.ts and tests)
 │   ├── auth.service.ts    register, verify mobile, login, refresh, logout, change password
@@ -252,20 +287,28 @@ src/
 │   ├── engineer.service.ts  admin engineer management
 │   ├── adminBootstrap.service.ts  admin creation for the CLI script
 │   ├── password.service.ts  Argon2id hashing/verification
+│   ├── report.service.ts  report submission flow, citizen list/summary/detail, authorised image access
+│   ├── severity.ts        estimateSeverity() (heuristic estimate)
+│   ├── ai/aiClient.ts     AiClient interface + HTTP client for the AI service (timeout, secret header, zod-validated response)
+│   ├── images/            detectImageType (magic bytes), processImage (sharp display copy)
+│   ├── location/          haversine, exifGps (exifr), verifyLocation
+│   ├── storage/fileStorage.ts  FileStorage (random UUID keys under originals/ and display/)
 │   ├── sms/               SmsSender interface + MockSmsSender (development only)
 │   └── clock.ts           injectable clock (tests simulate expiry)
-├── middleware/            cors, csrf, auth (authenticate / requireRole / requirePasswordChanged), rateLimit, errorHandler, notFound, requestLogger
+├── middleware/            cors, csrf, auth (authenticate / requireRole / requirePasswordChanged), rateLimit, upload (multer), errorHandler, notFound, requestLogger
 ├── validation/schemas.ts  zod schemas for every request body, params and query
-├── scripts/createAdmin.ts admin bootstrap CLI (`npm run admin:create`)
+├── scripts/               createAdmin.ts (`npm run admin:create`), resetPassword.ts + accountPasswordReset.ts
+│                          (`npm run account:reset-password`), prompt.ts (shared hidden-input prompter)
 ├── types/                 api.ts (response types), express.d.ts (req.auth)
 ├── utils/                 apiResponse, httpError, validation (parseInput), authCookies, crypto, phone
 └── generated/prisma/      generated Prisma client (NOT in Git; recreated by `prisma generate`)
 prisma/
-├── schema.prisma          User, OtpCode, RefreshToken models
+├── schema.prisma          User, OtpCode, RefreshToken, Report, ReportImage, AiDetection, ReportStatusHistory
 └── migrations/            committed SQL migrations
 tests/
-├── *.test.ts              node:test test files (auth, admin, cors, env, errorHandling, health)
-├── helpers/               startTestServer, testDb (isolated test schema), authTestApp (fake SMS, test clock, cookie/CSRF client)
+├── *.test.ts              node:test test files (auth, admin, reports, reportUnits, aiClient, cors, env, errorHandling, health)
+├── helpers/               startTestServer, testDb (isolated test schema), authTestApp (fake SMS, fake AI, temp upload dir, test clock,
+│                          cookie/CSRF/multipart client), fakeAi, testImages (JPEG/PNG, hand-built EXIF GPS)
 └── tsconfig.json          type-checks tests together with src/
 ```
 - Request flow: **route → controller → service → Prisma**. Routes and controllers contain no business logic.
@@ -277,12 +320,17 @@ tests/
 ```text
 src/
 ├── main.tsx                     BrowserRouter + AuthProvider + routes
-├── lib/api.ts                   the ONLY HTTP client: cookies (credentials: include), CSRF header, one silent refresh + retry on 401
+├── lib/api.ts                   the ONLY HTTP client: cookies (credentials: include), CSRF header, one silent refresh + retry on 401,
+│                                multipart uploads (postForm) and protected image downloads (apiBlob)
 ├── lib/types.ts                 User / role / status types (mirror the backend's public user)
 ├── features/auth/               AuthContext (who is logged in), authApi/profileApi, Login, Register, VerifyOtp,
 │                                ChangePasswordPage (forced for temporary passwords), ChangePasswordForm
 ├── features/admin/              engineersApi, EngineersPage (list/search/filter/paginate/create/activate),
 │                                EngineerDetailPage (view/edit/activate), CreateEngineerForm
+├── features/citizen/            reportsApi, types, labels, CitizenDashboardPage (summary + list), NewReportPage,
+│                                LiveCameraCapture (getUserMedia + geolocation), GalleryPicker, LocationMap (react-leaflet),
+│                                ReportPhoto (authorised image + detection boxes), ReportDetailPage, SeverityNote
+├── lib/map.ts                   Leaflet CSS, marker icons, OSM tile URL/attribution
 ├── pages/                       ProfilePage (citizen/engineer/admin own profile), NotFoundPage
 ├── layouts/                     AuthLayout (login/register cards), AppLayout (role-aware navigation, logout)
 ├── routes/                      AppRoutes, guards (RequireAuth, RequireRole, PublicOnly, HomeRedirect)
@@ -290,7 +338,11 @@ src/
 ├── utils/format.ts              labels and date formatting
 └── styles/index.css             Tailwind entry
 ```
-- Routes: `/login`, `/register`, `/verify` (logged-out only); `/profile` (all roles); `/admin/engineers`, `/admin/engineers/:id` (ADMIN only); `/change-password` (forced while `mustChangePassword`); `/` redirects by role (admin → engineers, others → profile).
+- Routes: `/login`, `/register`, `/verify` (logged-out only); `/profile` (all roles); `/reports`, `/reports/new`, `/reports/:id` (CITIZEN only); `/admin/engineers`, `/admin/engineers/:id` (ADMIN only); `/change-password` (forced while `mustChangePassword`); `/` redirects by role (admin → engineers, citizen → reports, engineer → profile).
+- Report photos are fetched through `apiBlob` (session cookie) and shown from object URLs; there are no public image URLs.
+- Maps (`lib/map.ts`): tiles from `https://tile.openstreetmap.org/{z}/{x}/{y}.png` with `referrerPolicy: strict-origin-when-cross-origin` (OSM requires a Referer; Helmet's default `no-referrer` page policy would otherwise block tiles if the frontend is ever served with it). `L.Icon.Default.imagePath = ""` is required: Leaflet otherwise prepends a folder detected from leaflet.css to the bundler's marker URLs and the marker 404s. `LocationMap` re-measures itself when its container resizes and shows a message if no tile can be loaded.
+- Live camera location (`LiveCameraCapture`): a fresh `watchPosition` (`enableHighAccuracy: true`, `maximumAge: 0`) starts when the step opens; the citizen sees the live coordinates and reported accuracy; the photo uses the most precise reading the device reported in the last 30 s (an unmodified real reading). Accuracy worse than 100 m shows a warning (UI hint only; the backend's `GPS_ACCURACY_THRESHOLD_METERS` decides and flags the report). Permission denied / unavailable / timeout show explanations and a "Try location again" button. `enableHighAccuracy` does not guarantee GPS: laptops/desktops often only have Wi-Fi/IP positioning (hundreds of metres or more).
+- `public/favicon.svg` is the site icon.
 - Tokens are **never** stored in `localStorage`/`sessionStorage`; the CSRF token is kept in memory only.
 - In development the Vite dev server proxies `/api` to the backend (`API_PROXY_TARGET`, default `http://localhost:3000`), so the browser sees one origin.
 
@@ -300,7 +352,8 @@ src/
 - **Main backend (Node.js + Express + Prisma):** the main application backend. Authentication, authorisation, all business rules, report workflow and statuses, EXIF parsing and location verification, assignment calculation, admin–engineer chat (WebSockets), SMS sending, file uploads, and all database access through Prisma. It calls the AI service to analyse images.
 - **AI service (Python + FastAPI):** AI inference only. It loads the existing YOLOv8 `best.pt` **once** at startup, accepts an image, and returns detections (class, confidence, bounding box). It does not handle users, authentication, report workflow or the database.
 - **Database (PostgreSQL):** accessed only by the main backend, through Prisma.
-- Which service computes severity, and how the main backend calls the AI service, are open decisions (§14).
+- **Severity is computed by the main backend** (decided 2026-11-14). The AI service only returns detections.
+- **Main backend → AI service (decided 2026-11-14):** HTTP to the internal `AI_SERVICE_URL`, multipart field `image`, shared secret in the `X-AI-Service-Key` header (`AI_SERVICE_SECRET` in `backend/api/.env` = `AI_SHARED_SECRET` in `backend/ai/.env`). The URL and the secret are never sent to the frontend. Every AI response is validated with zod (shape, class names match the model's class list, boxes inside the image, image size matches the copy that was sent); timeouts, connection errors, 4xx/5xx and malformed responses become `aiStatus = FAILED`.
 - In the main backend, **routes** call **services**; services call the database (through Prisma) and the AI service. Routes contain no business logic.
 
 ---
@@ -309,16 +362,22 @@ src/
 
 - AI inference runs in the separate **Python + FastAPI AI service**.
 - Use the **existing trained `best.pt`** (YOLOv8, trained on RDD2022). **Do not train or retrain.**
-- Expected location: `backend/ai/weights/best.pt`. The path must be configurable through an environment variable. The file is **not yet in the repository**.
+- Location: `backend/ai/weights/best.pt` (present locally, **never** in Git; SHA-256 `676c82da…4b084162f`). Configurable with `AI_MODEL_PATH`.
+- **Model facts (read from the file with Ultralytics, 2026-11-14):** task `detect`, YOLOv8s (fine-tuned from `yolov8s.pt`), 11,137,148 parameters, strides 8/16/32, 4 classes `{0: longitudinal_crack, 1: transverse_crack, 2: alligator_crack, 3: pothole}`, trained at `imgsz=640` for 50 epochs (saved by Ultralytics 8.4.207). Training metrics stored in the checkpoint have not been reviewed and must not be quoted as an evaluation.
+- **Thresholds:** confidence **0.25** and IoU **0.7** (Ultralytics defaults), configurable with `AI_CONFIDENCE_THRESHOLD` / `AI_IOU_THRESHOLD`. Do not change the default based on single images. Inference runs on **CPU** (`AI_DEVICE=cpu`).
 - If the weights file is missing, the AI service must fail with a clear error message rather than produce fake predictions.
 - Load the model once (at AI service startup), not once per request.
 - Inference output for each detection: class name, confidence, bounding box. The main backend stores the raw detections with the report.
 - Read class names **from the model file itself**. Do not hard-code assumed class lists.
 - Run inference so that it does not block the async event loop (for example in a thread pool).
 
-### Severity estimation (initial, heuristic)
-- Estimate severity from available detection information: **bounding-box area relative to the image, number of detections, confidence**, and possibly damage class.
-- Output a simple level (for example `low` / `medium` / `high`). Keep the formula in **one module** with configurable thresholds. Which service hosts it is an open decision (§14).
+### Severity estimation (initial, heuristic) — implemented in the main backend
+- Formula (agreed 2026-11-14), in `backend/api/src/services/severity.ts` with all constants in `SEVERITY_CONFIG` (`src/config/reports.ts`):
+  `score = Σ over detections of areaFraction × confidence × classWeight`
+  - class weights: `pothole 1.0`, `alligator_crack 0.8`, `longitudinal_crack 0.5`, `transverse_crack 0.5`; a class not in the table gets `1.0` (unknown damage is never down-weighted)
+  - `score ≥ 0.15 → HIGH`, `score ≥ 0.05 → MEDIUM`, `score > 0 → LOW`; **no detections → no severity** (null, shown as "no damage detected automatically")
+  - `areaFraction` = box area / display-image area. Example: the real pothole test (4.4 % of the image, confidence 0.69) scores ≈ 0.03 → LOW.
+- Stored as `reports.ai_severity` + `ai_severity_score`. `admin_severity`, `admin_severity_by_id`, `admin_severity_at` exist for the admin phase and are never overwritten by the AI value.
 - **This is a heuristic estimate, not a validated engineering measurement.** UI text and documentation must say "estimated severity" and must not claim engineering accuracy.
 - Admins can override severity. Store `ai_severity`, `admin_severity` and who changed it and when.
 - The exact formula and thresholds must be agreed with the owner.
@@ -339,6 +398,13 @@ src/
   - `otp_codes`: `user_id` (→ users, CASCADE), `purpose`, `code_hash` (HMAC, never the code), `expires_at`, `attempts`, `consumed_at`, `created_at`. Index on (`user_id`, `purpose`, `created_at`).
   - `refresh_tokens`: `user_id` (→ users, CASCADE), `token_hash` (**unique**, SHA-256), `family_id`, `expires_at`, `revoked_at`, `replaced_by_id` (→ refresh_tokens, unique), `created_at`. Indexes on `user_id`, `family_id`, `expires_at`.
   - Timestamps are `timestamptz(3)`; table/column names are snake_case (`@@map`/`@map`).
+- **Phase 3** migration `20261114120000_citizen_reports` (additive only: 5 enum types, 4 tables, indexes, foreign keys; applied to `public` with `migrate deploy`):
+  - Enums: `ReportStatus` (SUBMITTED, UNDER_REVIEW, ACCEPTED, REJECTED, DELAYED, COMPLETED), `CaptureMethod` (LIVE_CAMERA, GALLERY_UPLOAD), `LocationVerificationStatus` (VERIFIED, MISMATCH, NO_METADATA, NOT_CHECKED, BROWSER_GPS), `AiAnalysisStatus` (COMPLETED, FAILED), `SeverityLevel` (LOW, MEDIUM, HIGH).
+  - `reports`: citizen (→ users, RESTRICT), status, capture method, description, `latitude`/`longitude` (DOUBLE PRECISION), `gps_accuracy_m`, `location_status`, `location_needs_review`, `exif_latitude`/`exif_longitude`/`exif_distance_m`, `ai_status`, `ai_error_code`, `ai_model`, `ai_analyzed_at`, `ai_severity`, `ai_severity_score`, `admin_severity`, `admin_severity_by_id` (→ users, SET NULL), `admin_severity_at`, timestamps. Indexes: (citizen_id, created_at), (status, created_at), ai_severity, created_at, (latitude, longitude).
+  - `report_images`: report (CASCADE), `original_key` / `display_key` (unique, random storage keys — never file contents), `mime_type`, `size_bytes`, `width`/`height` (display copy), `sha256` (original).
+  - `ai_detections`: report + image (CASCADE), `class_id`, `class_name`, `confidence`, `x1,y1,x2,y2` (display-image pixels), `area_fraction`. Indexes on report, image, class name.
+  - `report_status_history`: report (CASCADE), `from_status`, `to_status`, `changed_by_id` (→ users, SET NULL), `note`, `created_at` (audit trail).
+- **Location storage (decided 2026-11-14):** plain latitude/longitude columns, no PostGIS; distances use haversine in code.
 - **Test schemas:** automated tests use a separate schema `app_test` (override with `TEST_DATABASE_SCHEMA`, must end with `_test`) in the same database; migrations are deployed there and its tables are truncated between tests. Tests never touch `public`.
 - Local database: PostgreSQL 18 on `localhost:5432`, database `road_damage_db`, dedicated user `road_damage_user` (already created; credentials only in the local `.env`).
 
@@ -382,13 +448,15 @@ Expectations:
 
   All are `HttpOnly`, `SameSite=Lax` by default (`COOKIE_SAMESITE`), and `Secure` when `NODE_ENV=production`.
 - **Every authenticated request re-checks the account** in the database (`authenticate` middleware): a deactivated or deleted account is rejected immediately, even with an unexpired access token.
-- **Refresh-token rotation:** `POST /auth/refresh` consumes the refresh token (single use, atomic) and issues a new pair in the same *family*. Presenting an already-used or revoked token is treated as theft: the **whole family is revoked** (that login session ends on every device that shares it). The frontend serialises refresh calls so it never races itself.
+- **Refresh-token rotation:** `POST /auth/refresh` consumes the refresh token (single use, atomic) and issues a new pair in the same *family*. Presenting an already-used or revoked token is treated as theft: the **whole family is revoked** (that login session ends on every device that shares it). The frontend serialises refresh calls within a tab **and across tabs** (Web Locks API, lock `road-damage-session-refresh`): all tabs share the cookies, so two tabs refreshing at once would otherwise send the same token and log the user out everywhere. A tab that had to wait for the lock first checks `GET /auth/me` and skips its own refresh if another tab already renewed the session.
+- **Expected 401s:** a logged-out visitor's page load makes one `GET /auth/me` (401) and one `POST /auth/refresh` (401) before the redirect to `/login`; an expired access token gives one 401 followed by a successful refresh and retry. Browsers log these 401s in the console; they are not errors in the app.
 - **Logout** revokes the refresh-token family and clears the cookies. An access token copied before logout stays valid until it expires (≤ 15 min) — standard JWT trade-off.
 - **Password change** requires the current password, revokes **all** the user's sessions and issues a fresh session to the current device.
 - **Temporary passwords:** engineers (created by an admin) have `must_change_password = true`. Until they change it they can only view their profile, change the password, refresh and log out; other routes return 403 `PASSWORD_CHANGE_REQUIRED` and the frontend forces `/change-password`.
 - **CSRF protection** (signed double-submit token): the frontend calls `GET /api/v1/auth/csrf`, which sets the `csrf_token` cookie and returns the same token in the body (kept in memory). Every `POST/PUT/PATCH/DELETE` under `/api/v1` — including login and registration — must send it in `X-CSRF-Token`; the header must equal the cookie and carry a valid HMAC signature, otherwise 403 `CSRF_TOKEN_INVALID`. The CORS allow-list (403 for foreign origins) and SameSite cookies are additional layers.
 - **Role checks:** `requireRole(...)` middleware; admin routes use `authenticate → requireRole("ADMIN") → requirePasswordChanged`.
 - **Admin bootstrap:** `npm run admin:create` (first admin) / `npm run admin:create -- --additional` (more admins). It prompts for name, mobile number and password (hidden on a terminal; piped input also works), never prints the password, and uses a PostgreSQL advisory lock so concurrent runs cannot create two "first" admins. There is no HTTP endpoint for creating admins.
+- **CLI password reset** (`npm run account:reset-password`, `src/scripts/resetPassword.ts` → `accountPasswordReset.ts` → `services/passwordReset.service.ts`): for operators with database access, not an app feature. Uses the normal password rule (`newPasswordSchema`) and `hashPassword()`; in one transaction it updates only `users.password_hash` and revokes all of that account's refresh tokens (access tokens already issued remain valid ≤ 15 min, as with logout). Role, status, verification, `must_change_password` and all data are unchanged; a PENDING_VERIFICATION citizen still has to verify the mobile number, and a DEACTIVATED account stays deactivated. Never prints passwords or hashes. Tested in `tests/passwordReset.test.ts`.
 - **Rate limits** (per IP, in memory, disabled in tests): login 10 / 15 min, registration 10 / hour, OTP verify+resend 20 / 15 min → 429 `TOO_MANY_REQUESTS`. OTP also has per-account limits (§3.1).
 
 ### 7.3 REST API expectations
@@ -418,8 +486,16 @@ Expectations:
   | `POST /admin/engineers` | ADMIN | create engineer (`fullName`, `mobileNumber`, `temporaryPassword`) |
   | `GET /admin/engineers/:id` / `PATCH /admin/engineers/:id` | ADMIN | view / update (`fullName`, `mobileNumber`) |
   | `PATCH /admin/engineers/:id/status` | ADMIN | `{ status: "ACTIVE" \| "DEACTIVATED" }`; deactivation revokes sessions |
+  | `POST /reports` | CITIZEN | multipart: `image` (one file), `captureMethod`, `latitude`, `longitude`, `gpsAccuracyMeters` (required for LIVE_CAMERA, not allowed for GALLERY_UPLOAD), `description?` → 201 `{ report }` |
+  | `GET /reports?page&pageSize&status&sort` | CITIZEN | own reports only (pageSize ≤ 50, sort `newest`/`oldest`) |
+  | `GET /reports/summary` | CITIZEN | `{ summary: { total, byStatus } }` |
+  | `GET /reports/:id` | CITIZEN | own report (another citizen's report → 404) |
+  | `GET /reports/:id/images/:imageId` | CITIZEN (own), ADMIN (any) | metadata-free display JPEG, `Cache-Control: private, no-store` |
+
+  Citizen report responses never contain storage keys, EXIF coordinates, SHA-256 hashes or admin fields.
 
   Main error codes: `VALIDATION_ERROR` (400, `details.fields` per field), `INVALID_CREDENTIALS`, `UNAUTHENTICATED`, `TOKEN_EXPIRED`, `SESSION_INVALID` (401), `FORBIDDEN`, `ACCOUNT_NOT_VERIFIED`, `ACCOUNT_DEACTIVATED`, `PASSWORD_CHANGE_REQUIRED`, `CSRF_TOKEN_INVALID`, `CORS_ORIGIN_NOT_ALLOWED` (403), `ENGINEER_NOT_FOUND` (404), `MOBILE_ALREADY_REGISTERED` (409), `OTP_INVALID`, `OTP_EXPIRED`, `OTP_ATTEMPTS_EXCEEDED` (400), `OTP_RESEND_TOO_SOON`, `OTP_RESEND_LIMIT`, `TOO_MANY_REQUESTS` (429, with `details.retryAfterSeconds` for OTP), `SMS_UNAVAILABLE` (503).
+  Phase 3 adds: `REPORT_NOT_FOUND`, `IMAGE_NOT_FOUND` (404), `IMAGE_REQUIRED`, `IMAGE_INVALID`, `UNEXPECTED_FIELD`, `INVALID_MULTIPART`, `MULTIPART_REQUIRED` (400), `FILE_TOO_LARGE`, `IMAGE_DIMENSIONS_TOO_LARGE` (413), `UNSUPPORTED_IMAGE_TYPE` (415).
 - Use JSON. Validate every request in the main backend with **zod** (`src/validation/schemas.ts`, adopted in Phase 2). Never return internal fields such as password hashes, OTP hashes or refresh-token hashes.
 - Use correct HTTP status codes and a consistent error format.
 - List endpoints support **pagination**, **sorting** and **filters**, including: location/area, severity, damage class, submission date range, report status, AI confidence range, assigned engineer, assignment status, location verification status, repair status, priority, possible duplicates, and unassigned only.
@@ -465,6 +541,14 @@ Configured in `backend/api/.env` (never committed; template in `backend/api/.env
 | `PHONE_DEFAULT_COUNTRY` | no | none | ISO code (e.g. `GB`) used when a number is typed without `+country code`. |
 | `COOKIE_SAMESITE` | no | `lax` | `lax`, `strict` or `none` (`none` only with `NODE_ENV=production`). |
 | `TEST_DATABASE_SCHEMA` | no (tests only) | `app_test` | Schema used by database tests; must end with `_test`. |
+| `AI_SERVICE_URL` | yes (except `test`) | — | Internal URL of the AI service, e.g. `http://127.0.0.1:8000`. Never sent to the frontend; only its origin is logged. |
+| `AI_SERVICE_SECRET` | yes (except `test`) | — | ≥ 32 chars, must equal `AI_SHARED_SECRET` in `backend/ai/.env`. Placeholder `CHANGE_ME` rejected. Never logged. |
+| `AI_REQUEST_TIMEOUT_MS` | no | `30000` | Whole milliseconds. |
+| `UPLOAD_DIR` | no | `storage/uploads` | Relative to `backend/api/`. Holds `originals/` and `display/`; never served statically. |
+| `EXIF_LOCATION_TOLERANCE_KM` | no | `2` | Gallery uploads: EXIF within this distance → `VERIFIED`. |
+| `GPS_ACCURACY_THRESHOLD_METERS` | no | `100` | Live camera: accuracy worse than this → flagged for admin review. |
+
+AI service (`backend/ai/.env`, template `backend/ai/.env.example`, prefix `AI_`): `AI_SHARED_SECRET` (required, ≥ 32 chars), `AI_MODEL_PATH` (`weights/best.pt`), `AI_CONFIDENCE_THRESHOLD` (`0.25`), `AI_IOU_THRESHOLD` (`0.7`), `AI_IMAGE_SIZE` (`640`), `AI_DEVICE` (`cpu`), `AI_MAX_IMAGE_BYTES` (10 MB), `AI_MAX_IMAGE_PIXELS` (8000×8000). Invalid configuration stops the service with field names only (never values).
 
 Frontend (`frontend/.env`, optional): `VITE_API_BASE_URL` (empty in development; set only if the API is on a different origin in production) and `API_PROXY_TARGET` (dev proxy target, default `http://localhost:3000`).
 
@@ -485,14 +569,14 @@ Frontend (`frontend/.env`, optional): `VITE_API_BASE_URL` (empty in development;
 ### GPS (live camera)
 - Use the browser Geolocation API with user permission. Record the coordinates and the reported accuracy.
 - If the reported accuracy is poor, flag the report for admin review. The status stays `browser_gps`, and the captured coordinates and accuracy are kept. **Never automatically reject** such reports.
-- The accuracy threshold for "poor" must be **configurable**. Its value is **TBD**; do not invent one.
+- The accuracy threshold for "poor" is configurable: `GPS_ACCURACY_THRESHOLD_METERS`, default **100 m** (agreed 2026-11-14).
 - Note: browsers allow camera and geolocation only on **HTTPS or localhost**.
 
 ### EXIF verification (gallery uploads only)
 - The EXIF comparison runs **only for gallery uploads**.
 - Read EXIF GPS on the main backend from the **original** upload, before any image processing removes it.
 - Compare EXIF coordinates with the manually selected location using the haversine (great-circle) distance.
-- The tolerance is **configurable** (a few kilometres; the default value is to be agreed).
+- The tolerance is configurable: `EXIF_LOCATION_TOLERANCE_KM`, default **2 km** (agreed 2026-11-14).
 - Gallery outcomes: `verified` (distance ≤ tolerance), `mismatch` (distance > tolerance), `no_metadata` (no EXIF GPS in the image), `not_checked` (the location check has not been run yet).
 - **Live-camera reports** get no EXIF comparison. Their status is `browser_gps` (location taken from browser GPS). They are never marked `no_metadata` just because browser camera images lack EXIF GPS.
 - **Never automatically reject.** `mismatch` and `no_metadata` reports, and live-camera reports with poor GPS accuracy, are flagged for admin review.
@@ -500,7 +584,7 @@ Frontend (`frontend/.env`, optional): `VITE_API_BASE_URL` (empty in development;
 
 ### Location privacy
 - Photos and coordinates are personal data. Show only what each role needs.
-- Consider removing EXIF from the copy shown to other users while keeping the extracted values in the database (to be decided).
+- **Implemented:** the copy shown to users and sent to the AI service has all metadata removed (sharp re-encode); the original with EXIF is stored privately and never served; the extracted EXIF coordinates are stored in the database but never returned to citizens.
 - Never log exact coordinates or image contents unnecessarily.
 - Never commit real user uploads or location data to Git.
 
@@ -549,6 +633,7 @@ Frontend (`frontend/.env`, optional): `VITE_API_BASE_URL` (empty in development;
   | `npm run prisma:validate` / `npm run prisma:format` | validates / formats `prisma/schema.prisma` |
   | `npm run prisma:migrate:deploy` / `npm run prisma:migrate:status` | applies committed migrations (non-destructive) / shows migration status |
   | `npm run admin:create` | creates the first admin (add `-- --additional` for more admins); production build: `node dist/scripts/createAdmin.js` |
+  | `npm run account:reset-password` | operator tool: resets the password of one existing account of any role (asks for the mobile number, shows name/role/status, asks "yes", then the new password twice, hidden); production build: `node dist/scripts/resetPassword.js` |
   | `postinstall` (automatic) | runs `prisma generate` after `npm install` |
 
   Before considering work finished, run **`npm run typecheck`, `npm test` and `npm run build`**; `tsx` alone does not check types.
@@ -581,13 +666,14 @@ Frontend (`frontend/.env`, optional): `VITE_API_BASE_URL` (empty in development;
 - Use a restrictive CORS policy: list allowed frontend origins explicitly (implemented; see §7.6).
 - Security headers are set with Helmet; `X-Powered-By` is disabled. JSON request bodies are limited to 100 KB.
 - Validate uploads: type, size, random filename, no path traversal.
-- Rate-limit login, OTP and report submission. (Login, registration and OTP limits are implemented, §7.2; report submission does not exist yet. The limiter is in-memory and per IP: it resets on restart, and behind a reverse proxy Express `trust proxy` must be configured first or all clients share one IP.)
+- Rate-limit login, OTP and report submission. (Login, registration and OTP limits are implemented, §7.2; report submission is limited to 10/hour per citizen, Phase 3. The limiter is in-memory and per IP: it resets on restart, and behind a reverse proxy Express `trust proxy` must be configured first or all clients share one IP.)
 - Authentication cookies are httpOnly, SameSite and Secure in production; state-changing requests need a CSRF token (§7.2).
 - Escape user-generated content (chat, notes). Never insert raw HTML.
 - Do not include stack traces or internal details in API error responses.
 - Use HTTPS in deployment.
 - Apply the principle of least privilege to the PostgreSQL database user.
-- How the AI service is protected from public access is an open decision (§14).
+- The AI service is protected by a shared secret header (`X-AI-Service-Key`, constant-time comparison) and binds to `127.0.0.1` by default; only the main backend calls it. In deployment it must not be exposed publicly.
+- Uploads: multer runs only after authentication, role check, CSRF and rate limiting; the file type is detected from content; files get random server-generated names under `UPLOAD_DIR` with mode 0600; stored files are deleted if the database write fails.
 
 ---
 
@@ -597,9 +683,12 @@ Frontend (`frontend/.env`, optional): `VITE_API_BASE_URL` (empty in development;
 - **Current main backend tests** (`backend/api/tests/`):
   - Without a database: health endpoints (200, 503 without leaking details, no database use for `/api/health`), Helmet headers, CORS (allowed/disallowed origins, preflights, exact matching), error handling (404, invalid JSON, payload too large, hidden/visible stack, `HttpError`), environment validation and SMS sender selection.
   - With the `app_test` schema (Phase 2): registration (normalization, hashing, duplicates, validation), OTP (success, reuse, wrong code, attempt limit, expiry, resend cooldown and hourly limit), login (unverified, wrong/unknown credentials, cookie flags, no secrets in responses), sessions (expiry, refresh rotation, reuse detection, logout), CSRF and origin rejection, profile and password change, rate limiting, admin authorization (citizen/engineer forbidden), engineer management (create, temporary password, list/search/filter, detail, update, deactivate/reactivate) and the admin bootstrap (duplicate prevention, concurrency).
-  - Fakes: `FakeSms` captures OTP messages; `TestClock` simulates expiry; the AI service is not involved yet.
-- **Frontend:** no automated tests yet (tool still undecided). Phase 2 was verified end to end through the Vite dev proxy with HTTP requests (pages served, all auth flows, cookies, roles); the UI has **not** been checked in a real browser by automated tests.
-- **AI service:** pytest is the *proposed* default (not yet confirmed). Mock the model in unit tests so they don't need `best.pt`. If inference integration tests exist, skip them clearly when the weights are missing.
+  - Phase 3: severity formula, haversine, location verification, magic-byte detection, EXIF GPS reading (hand-built EXIF), metadata stripping, storage key validation; the HTTP AI client against a local fake server (success, secret header, unreachable, timeout, 4xx/5xx, malformed JSON, wrong shapes, oversized); report API tests (roles, CSRF, validation, disguised/corrupt/oversized files, VERIFIED/MISMATCH/NO_METADATA/BROWSER_GPS, detections + severity stored, AI failure → FAILED, size mismatch, private originals, metadata-free display copy, image access per role, no leaked fields, file cleanup, list/summary/pagination/filters, 10/hour rate limit).
+  - Fakes: `FakeSms` captures OTP messages; `TestClock` simulates expiry; `FakeAiClient` replaces the AI service; uploads go to a temporary folder.
+- **AI service tests** (`backend/ai/tests/`, pytest): service key, response shape, configured thresholds, JPEG/PNG accepted, non-images/other formats/too large/too many pixels rejected, secret validation, clear error for missing weights; `test_real_model.py` loads the real `best.pt` and runs inference on a blank image (skipped when the weights are absent; it checks output format only, **not** accuracy).
+- **Manual end-to-end verification (2026-11-14):** real AI service + API (against `app_test`) + the Wikimedia Commons photo `Potholes.jpg`: 1 `pothole` detection at confidence ≈ 0.689, estimated severity LOW; location MISMATCH vs a far location, VERIFIED (≈ 334 m) near the photo's own EXIF position; with the AI service stopped the report was saved as FAILED. Only the pothole class has been exercised.
+- **Frontend:** no automated tests yet (tool still undecided). Phase 2 was verified end to end through the Vite dev proxy with HTTP requests (pages served, all auth flows, cookies, roles). Phase 3 citizen pages were checked on 2026-11-14 in headless Chrome (Windows) driven over the DevTools protocol from scratch scripts (not committed): login/redirects, expired-token refresh, simultaneous refresh in two tabs, gallery and detail maps (tiles + markers), live camera with Chrome's fake camera and emulated geolocation (coarse → precise, poor accuracy flagged, unavailable, denied + retry), favicon. Real device GPS accuracy and a real camera still need a manual test on a phone.
+- **AI service:** pytest (in use since Phase 3). Mock the model in unit tests so they don't need `best.pt`. If inference integration tests exist, skip them clearly when the weights are missing.
 - **Frontend testing tool:** still to be agreed (for example Vitest + React Testing Library).
 - Tests must never send real SMS messages or use production data.
 - Do not claim tests pass unless they were actually run.
@@ -621,28 +710,31 @@ Frontend (`frontend/.env`, optional): `VITE_API_BASE_URL` (empty in development;
 ## 14. Open decisions (need owner approval)
 
 - [ ] SMS provider
-- [ ] EXIF parsing library
-- [ ] Storage approach for `best.pt` and datasets (Git LFS / cloud / manual)
-- [ ] Default EXIF location tolerance (km)
-- [ ] Browser GPS accuracy threshold for flagging live-camera reports (configurable; value TBD)
-- [ ] Severity heuristic formula and thresholds
+- [x] EXIF parsing library — `exifr` (2026-11-14)
+- [ ] Storage approach for `best.pt` and datasets (Git LFS / cloud / manual) — currently: copied manually into `backend/ai/weights/`, git-ignored
+- [x] Default EXIF location tolerance — 2 km, `EXIF_LOCATION_TOLERANCE_KM` (2026-11-14)
+- [x] Browser GPS accuracy threshold — 100 m, `GPS_ACCURACY_THRESHOLD_METERS` (2026-11-14)
+- [x] Severity heuristic formula and thresholds — weighted score, §6 (2026-11-14)
 - [ ] Engineer workload/availability formula
 - [ ] Priority definition (derived from severity? set manually by the admin?)
 - [ ] Duplicate-report detection rule (distance + time window?)
 - [ ] Notification channel for admins and engineers (no in-app channel is confirmed)
 - [ ] Email login / email field for accounts (mobile number + password is implemented)
-- [ ] Forgot-password / password-reset flow (not implemented; needs the SMS provider)
+- [ ] Forgot-password / password-reset flow for users in the app (not implemented; needs the SMS provider). An operator CLI reset exists: `npm run account:reset-password`.
 - [ ] How engineers receive their temporary password (currently: admin sets it and shares it privately) — or an SMS/link-based account setup once SMS works
 - [ ] Admin management of citizen and admin accounts through the API (only engineer management is implemented)
 - [ ] Rate-limit storage and `trust proxy` setting for deployment (current limiter is in-memory, per IP)
 - [ ] Whether Reject and Delay require a reason (proposed)
 - [ ] Proposed convention to confirm: feature branches
-- [ ] Frontend state management and testing tools; main backend testing tool (`node:test` currently in use — confirm); AI service testing tool (pytest proposed)
+- [ ] Frontend state management and testing tools; main backend testing tool (`node:test` currently in use — confirm); AI service testing tool (pytest in use — confirm)
 - [ ] WebSocket library and API documentation approach for the main backend (request validation: zod, adopted in Phase 2)
-- [ ] How the main backend calls the AI service, and how the AI service is protected from public access
-- [ ] Which service computes severity (main backend or AI service)
-- [ ] Location storage in PostgreSQL (plain latitude/longitude columns or PostGIS)
+- [x] How the main backend calls the AI service, and how it is protected — internal URL + shared secret header, §5 (2026-11-14)
+- [x] Which service computes severity — main backend (2026-11-14)
+- [x] Location storage — plain latitude/longitude columns (2026-11-14)
 - [ ] Confirm the Prisma migration workflow (`migrate diff` + review + `migrate deploy` is in use because the DB user cannot create a shadow database, §7.1)
 - [ ] PostgreSQL hosting/deployment (for example local install, Docker or a managed service)
-- [ ] Python version and lint/format tooling
+- [x] Python version — 3.12.16 via uv (2026-11-14)
+- [ ] Python lint/format tooling
 - [ ] Deployment target
+- [ ] Validation of the three crack classes (and wider pothole testing) with the owner's RDD2022 data
+- [ ] HEIC support for uploads (not supported now)

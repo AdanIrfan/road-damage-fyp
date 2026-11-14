@@ -4,7 +4,8 @@
 // (see src/db/prisma.ts).
 //
 // Phase 2 (authentication and user management): users, OTP codes, refresh tokens.
-// Models for later phases (reports, assignments, messages, ...) are NOT added yet.
+// Phase 3 (citizen reporting): reports, report images, AI detections, report status history.
+// Models for later phases (assignments, messages, notifications, ...) are NOT added yet.
 
 generator client {
   provider     = "prisma-client"
@@ -51,10 +52,13 @@ model User {
   createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  createdBy     User?          @relation("UserCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  createdUsers  User[]         @relation("UserCreatedBy")
+  createdBy     User?                 @relation("UserCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdUsers  User[]                @relation("UserCreatedBy")
   otpCodes      OtpCode[]
   refreshTokens RefreshToken[]
+  reports       Report[]              @relation("ReportCitizen")
+  severityEdits Report[]              @relation("ReportAdminSeverity")
+  statusChanges ReportStatusHistory[]
 
   @@index([role, status])
   @@index([createdAt])
@@ -102,4 +106,161 @@ model RefreshToken {
   @@index([familyId])
   @@index([expiresAt])
   @@map("refresh_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: citizen reports
+// ---------------------------------------------------------------------------
+
+/// Report workflow status (CLAUDE.md §3). Only SUBMITTED is used until the admin review phase.
+enum ReportStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  ACCEPTED
+  REJECTED
+  DELAYED
+  COMPLETED
+}
+
+enum CaptureMethod {
+  LIVE_CAMERA
+  GALLERY_UPLOAD
+}
+
+/// Gallery uploads: VERIFIED | MISMATCH | NO_METADATA | NOT_CHECKED. Live camera: BROWSER_GPS.
+enum LocationVerificationStatus {
+  VERIFIED
+  MISMATCH
+  NO_METADATA
+  NOT_CHECKED
+  BROWSER_GPS
+}
+
+enum AiAnalysisStatus {
+  /// The AI service answered with a valid result (which may contain zero detections).
+  COMPLETED
+  /// The AI service was unavailable, timed out or answered with an invalid response.
+  FAILED
+}
+
+/// Estimated severity (heuristic, NOT an engineering measurement).
+enum SeverityLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model Report {
+  id                  String                     @id @default(uuid()) @db.Uuid
+  citizenId           String                     @map("citizen_id") @db.Uuid
+  status              ReportStatus               @default(SUBMITTED)
+  captureMethod       CaptureMethod              @map("capture_method")
+  description         String?                    @db.VarChar(1000)
+  /// Location chosen on the map (gallery) or captured by browser GPS (live camera). WGS84 degrees.
+  latitude            Float
+  longitude           Float
+  /// Browser-reported GPS accuracy in metres (live camera only).
+  gpsAccuracyM        Float?                     @map("gps_accuracy_m")
+  locationStatus      LocationVerificationStatus @map("location_status")
+  /// True when an admin should check the location (mismatch, no metadata, poor GPS accuracy).
+  locationNeedsReview Boolean                    @map("location_needs_review")
+  /// GPS position read from the original photo's EXIF (gallery uploads). Never sent to citizens.
+  exifLatitude        Float?                     @map("exif_latitude")
+  exifLongitude       Float?                     @map("exif_longitude")
+  /// Haversine distance between the EXIF position and the selected location, in metres.
+  exifDistanceM       Float?                     @map("exif_distance_m")
+  aiStatus            AiAnalysisStatus           @map("ai_status")
+  /// Why the analysis failed (unavailable | timeout | rejected | invalid_response).
+  aiErrorCode         String?                    @map("ai_error_code") @db.VarChar(40)
+  /// Model name reported by the AI service.
+  aiModel             String?                    @map("ai_model") @db.VarChar(100)
+  aiAnalyzedAt        DateTime?                  @map("ai_analyzed_at") @db.Timestamptz(3)
+  /// Estimated severity computed by the main backend from the AI detections. Null if no damage was detected or the analysis failed.
+  aiSeverity          SeverityLevel?             @map("ai_severity")
+  aiSeverityScore     Float?                     @map("ai_severity_score")
+  /// Severity set by an admin (admin review phase). The AI value is always kept as well.
+  adminSeverity       SeverityLevel?             @map("admin_severity")
+  adminSeverityById   String?                    @map("admin_severity_by_id") @db.Uuid
+  adminSeverityAt     DateTime?                  @map("admin_severity_at") @db.Timestamptz(3)
+  createdAt           DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  citizen         User                  @relation("ReportCitizen", fields: [citizenId], references: [id], onDelete: Restrict)
+  adminSeverityBy User?                 @relation("ReportAdminSeverity", fields: [adminSeverityById], references: [id], onDelete: SetNull)
+  images          ReportImage[]
+  detections      AiDetection[]
+  statusHistory   ReportStatusHistory[]
+
+  @@index([citizenId, createdAt])
+  @@index([status, createdAt])
+  @@index([aiSeverity])
+  @@index([createdAt])
+  @@index([latitude, longitude])
+  @@map("reports")
+}
+
+/// One uploaded photo. Files live in UPLOAD_DIR; only their random keys are stored here.
+model ReportImage {
+  id          String   @id @default(uuid()) @db.Uuid
+  reportId    String   @map("report_id") @db.Uuid
+  /// The upload exactly as received (keeps EXIF). Private: never served.
+  originalKey String   @unique @map("original_key") @db.VarChar(200)
+  /// Re-encoded JPEG without metadata, orientation applied. The only copy that is served.
+  displayKey  String   @unique @map("display_key") @db.VarChar(200)
+  /// MIME type of the original upload (detected from its content).
+  mimeType    String   @map("mime_type") @db.VarChar(50)
+  sizeBytes   Int      @map("size_bytes")
+  /// Dimensions of the display copy (the coordinate space of the AI boxes).
+  width       Int
+  height      Int
+  /// SHA-256 of the original upload.
+  sha256      String   @db.VarChar(64)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  report     Report        @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  detections AiDetection[]
+
+  @@index([reportId])
+  @@map("report_images")
+}
+
+/// One raw detection returned by the AI service. Box coordinates are pixels of the display image.
+model AiDetection {
+  id           String @id @default(uuid()) @db.Uuid
+  reportId     String @map("report_id") @db.Uuid
+  imageId      String @map("image_id") @db.Uuid
+  classId      Int    @map("class_id")
+  className    String @map("class_name") @db.VarChar(100)
+  confidence   Float
+  x1           Float
+  y1           Float
+  x2           Float
+  y2           Float
+  /// Box area divided by image area (0..1).
+  areaFraction Float  @map("area_fraction")
+
+  report Report      @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  image  ReportImage @relation(fields: [imageId], references: [id], onDelete: Cascade)
+
+  @@index([reportId])
+  @@index([imageId])
+  @@index([className])
+  @@map("ai_detections")
+}
+
+/// Audit trail of report status changes (who, what, when).
+model ReportStatusHistory {
+  id          String        @id @default(uuid()) @db.Uuid
+  reportId    String        @map("report_id") @db.Uuid
+  fromStatus  ReportStatus? @map("from_status")
+  toStatus    ReportStatus  @map("to_status")
+  changedById String?       @map("changed_by_id") @db.Uuid
+  note        String?       @db.VarChar(1000)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  report    Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  changedBy User?  @relation(fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([reportId, createdAt])
+  @@map("report_status_history")
 }

@@ -1,7 +1,12 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createApp } from "../../src/app.js";
 import type { PrismaClient } from "../../src/db/prisma.js";
 import { createServices, type Services } from "../../src/services/index.js";
 import type { SmsSender } from "../../src/services/sms/index.js";
+import { createLocalFileStorage } from "../../src/services/storage/fileStorage.js";
+import { FakeAiClient } from "./fakeAi.js";
 import { startTestServer, type TestServer } from "./testServer.js";
 
 export const ALLOWED_ORIGIN = "http://localhost:5173";
@@ -40,18 +45,29 @@ export interface AuthTestContext {
   services: Services;
   sms: FakeSms;
   clock: TestClock;
+  ai: FakeAiClient;
+  /** Temporary upload folder, deleted by close(). */
+  uploadDir: string;
   client: () => TestClient;
   close: () => Promise<void>;
 }
 
+/** Location thresholds used by tests (the agreed defaults). */
+export const TEST_LOCATION_SETTINGS = { exifLocationToleranceKm: 2, gpsAccuracyThresholdMeters: 100 };
+
 export async function startAuthTestApp(prisma: PrismaClient, options: { rateLimiting?: boolean } = {}): Promise<AuthTestContext> {
   const sms = new FakeSms();
   const clock = new TestClock();
+  const ai = new FakeAiClient();
+  const uploadDir = await mkdtemp(join(tmpdir(), "road-damage-uploads-"));
   const services = createServices({
     prisma,
     authSecret: "test-secret-that-is-long-enough-for-validation-0123456789",
     sms,
     phoneDefaultCountry: undefined,
+    ai,
+    storage: await createLocalFileStorage(uploadDir),
+    location: TEST_LOCATION_SETTINGS,
     clock: clock.now,
   });
   const app = createApp(
@@ -67,8 +83,13 @@ export async function startAuthTestApp(prisma: PrismaClient, options: { rateLimi
     services,
     sms,
     clock,
+    ai,
+    uploadDir,
     client: () => new TestClient(server.baseUrl),
-    close: () => server.close(),
+    close: async () => {
+      await server.close();
+      await rm(uploadDir, { recursive: true, force: true });
+    },
   };
 }
 
@@ -119,6 +140,31 @@ export class TestClient {
   }
 
   get = (path: string): Promise<TestResponse> => this.request("GET", path);
+
+  /** Sends multipart/form-data (fetch sets the boundary). Keeps cookies and sends the CSRF token. */
+  async postForm(path: string, form: FormData, options: { csrf?: boolean } = {}): Promise<TestResponse> {
+    const headers: Record<string, string> = { origin: ALLOWED_ORIGIN };
+    if (options.csrf !== false) {
+      headers["x-csrf-token"] = await this.getCsrfToken();
+    }
+    if (this.cookies.size > 0) {
+      headers["cookie"] = [...this.cookies].map(([name, value]) => `${name}=${value}`).join("; ");
+    }
+    const res = await fetch(`${this.baseUrl}${path}`, { method: "POST", headers, body: form });
+    const setCookies = res.headers.getSetCookie();
+    this.storeCookies(setCookies);
+    const text = await res.text();
+    return { status: res.status, body: text === "" ? { success: false } : (JSON.parse(text) as TestResponse["body"]), text, setCookies };
+  }
+
+  /** Fetches a binary resource (e.g. an image) with the session cookies. */
+  async getRaw(path: string): Promise<Response> {
+    const headers: Record<string, string> = { origin: ALLOWED_ORIGIN };
+    if (this.cookies.size > 0) {
+      headers["cookie"] = [...this.cookies].map(([name, value]) => `${name}=${value}`).join("; ");
+    }
+    return fetch(`${this.baseUrl}${path}`, { headers });
+  }
   post = (path: string, body?: unknown): Promise<TestResponse> => this.request("POST", path, body ?? {});
   patch = (path: string, body?: unknown): Promise<TestResponse> => this.request("PATCH", path, body ?? {});
 

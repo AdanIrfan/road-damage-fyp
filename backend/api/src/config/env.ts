@@ -1,4 +1,6 @@
 import { existsSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isSupportedCountry, type CountryCode } from "libphonenumber-js/max";
 
 export type NodeEnv = "development" | "production" | "test";
@@ -19,6 +21,22 @@ export interface Env {
   /** ISO 3166 country used when a mobile number is entered without +country code. */
   phoneDefaultCountry: CountryCode | undefined;
   cookieSameSite: CookieSameSite;
+  /** Internal AI inference service. Undefined only in the test environment (tests inject a fake). */
+  ai: AiServiceConfig | undefined;
+  /** Absolute directory for uploaded images (never served directly). */
+  uploadDir: string;
+  /** Gallery uploads: EXIF position within this distance of the selected location counts as verified. */
+  exifLocationToleranceKm: number;
+  /** Live camera: browser GPS accuracy worse than this flags the report for admin review. */
+  gpsAccuracyThresholdMeters: number;
+}
+
+export interface AiServiceConfig {
+  /** Base URL, e.g. http://127.0.0.1:8000. Never sent to the frontend. */
+  url: string;
+  /** Shared secret sent in the X-AI-Service-Key header. Never logged or sent to the frontend. */
+  secret: string;
+  timeoutMs: number;
 }
 
 const NODE_ENVS: readonly NodeEnv[] = ["development", "production", "test"];
@@ -26,6 +44,13 @@ const DEFAULT_PORT = "3000";
 const PLACEHOLDER_PASSWORD = "YOUR_PASSWORD";
 const PLACEHOLDER_SECRET = "CHANGE_ME";
 const MIN_AUTH_SECRET_LENGTH = 32;
+const MIN_AI_SECRET_LENGTH = 32;
+const DEFAULT_AI_TIMEOUT_MS = 30_000;
+const DEFAULT_UPLOAD_DIR = "storage/uploads";
+const DEFAULT_EXIF_TOLERANCE_KM = 2;
+const DEFAULT_GPS_ACCURACY_THRESHOLD_M = 100;
+/** backend/api/ — relative UPLOAD_DIR values are resolved from here (works from src/ and dist/). */
+const API_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const COOKIE_SAME_SITE_VALUES: readonly CookieSameSite[] = ["lax", "strict", "none"];
 /** Vite dev server. Used only outside production when CORS_ORIGIN is not set. */
 const DEFAULT_DEV_CORS_ORIGINS: readonly string[] = ["http://localhost:5173"];
@@ -109,11 +134,113 @@ export function parseEnv(source: NodeJS.ProcessEnv): Env {
     problems.push("COOKIE_SAMESITE=none requires secure cookies, which are only enabled when NODE_ENV=production");
   }
 
+  const ai = parseAiService(source, nodeEnv, problems);
+
+  const rawUploadDir = source["UPLOAD_DIR"]?.trim() || DEFAULT_UPLOAD_DIR;
+  const uploadDir = isAbsolute(rawUploadDir) ? rawUploadDir : resolve(API_ROOT, rawUploadDir);
+
+  const exifLocationToleranceKm = parsePositiveNumber(
+    source["EXIF_LOCATION_TOLERANCE_KM"],
+    DEFAULT_EXIF_TOLERANCE_KM,
+    "EXIF_LOCATION_TOLERANCE_KM must be a positive number of kilometres",
+    problems,
+  );
+  const gpsAccuracyThresholdMeters = parsePositiveNumber(
+    source["GPS_ACCURACY_THRESHOLD_METERS"],
+    DEFAULT_GPS_ACCURACY_THRESHOLD_M,
+    "GPS_ACCURACY_THRESHOLD_METERS must be a positive number of metres",
+    problems,
+  );
+
   if (problems.length > 0 || nodeEnv === undefined || databaseUrl === undefined || cookieSameSite === undefined) {
     throw new EnvValidationError(problems);
   }
 
-  return { nodeEnv, port, databaseUrl, corsOrigins, authSecret, smsProvider, phoneDefaultCountry, cookieSameSite };
+  return {
+    nodeEnv,
+    port,
+    databaseUrl,
+    corsOrigins,
+    authSecret,
+    smsProvider,
+    phoneDefaultCountry,
+    cookieSameSite,
+    ai,
+    uploadDir,
+    exifLocationToleranceKm,
+    gpsAccuracyThresholdMeters,
+  };
+}
+
+/**
+ * AI_SERVICE_URL, AI_SERVICE_SECRET and AI_REQUEST_TIMEOUT_MS.
+ * Required outside the test environment. Values are never included in error messages.
+ */
+function parseAiService(
+  source: NodeJS.ProcessEnv,
+  nodeEnv: NodeEnv | undefined,
+  problems: string[],
+): AiServiceConfig | undefined {
+  const rawUrl = source["AI_SERVICE_URL"]?.trim() ?? "";
+  const secret = source["AI_SERVICE_SECRET"] ?? "";
+  const timeoutMs = parsePositiveNumber(
+    source["AI_REQUEST_TIMEOUT_MS"],
+    DEFAULT_AI_TIMEOUT_MS,
+    "AI_REQUEST_TIMEOUT_MS must be a positive whole number of milliseconds",
+    problems,
+    true,
+  );
+
+  if (rawUrl === "" && secret === "" && nodeEnv === "test") {
+    return undefined;
+  }
+
+  let url: string | undefined;
+  if (rawUrl === "") {
+    problems.push("AI_SERVICE_URL is required (for example http://127.0.0.1:8000)");
+  } else if (!isHttpUrl(rawUrl)) {
+    problems.push("AI_SERVICE_URL must be an http:// or https:// URL");
+  } else {
+    url = rawUrl.replace(/\/+$/, "");
+  }
+
+  if (secret === "") {
+    problems.push("AI_SERVICE_SECRET is required (the same value as AI_SHARED_SECRET in backend/ai/.env)");
+  } else if (secret.includes(PLACEHOLDER_SECRET)) {
+    problems.push(`AI_SERVICE_SECRET still contains the placeholder ${PLACEHOLDER_SECRET}; generate a real secret`);
+  } else if (secret.length < MIN_AI_SECRET_LENGTH) {
+    problems.push(`AI_SERVICE_SECRET must be at least ${MIN_AI_SECRET_LENGTH} characters long`);
+  }
+
+  return url === undefined ? undefined : { url, secret, timeoutMs };
+}
+
+function parsePositiveNumber(
+  raw: string | undefined,
+  fallback: number,
+  message: string,
+  problems: string[],
+  integer = false,
+): number {
+  const value = raw?.trim() ?? "";
+  if (value === "") {
+    return fallback;
+  }
+  const parsed = Number(value);
+  if (!/^\d+(\.\d+)?$/.test(value) || !(parsed > 0) || (integer && !Number.isInteger(parsed))) {
+    problems.push(message);
+    return fallback;
+  }
+  return parsed;
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && url.username === "" && url.password === "";
+  } catch {
+    return false;
+  }
 }
 
 /**

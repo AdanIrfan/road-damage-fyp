@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { isAbsolute } from "node:path";
 import { describe, it } from "node:test";
 import { EnvValidationError, parseEnv } from "../src/config/env.js";
 import { MockSmsSender } from "../src/services/sms/mockSmsSender.js";
@@ -6,8 +7,15 @@ import { createSmsSender } from "../src/services/sms/index.js";
 
 const validUrl = "postgresql://user:test-password@localhost:5432/test_db?schema=public";
 const authSecret = "a-test-secret-that-is-at-least-32-characters-long";
+const aiSecret = "an-ai-service-secret-that-is-at-least-32-chars";
 /** Minimal valid development configuration. */
-const dev = { DATABASE_URL: validUrl, AUTH_SECRET: authSecret, SMS_PROVIDER: "mock" };
+const dev = {
+  DATABASE_URL: validUrl,
+  AUTH_SECRET: authSecret,
+  SMS_PROVIDER: "mock",
+  AI_SERVICE_URL: "http://127.0.0.1:8000",
+  AI_SERVICE_SECRET: aiSecret,
+};
 
 function problemsFor(source: NodeJS.ProcessEnv): readonly string[] {
   try {
@@ -25,8 +33,16 @@ function hasProblem(source: NodeJS.ProcessEnv, pattern: RegExp): boolean {
 
 describe("parseEnv", () => {
   it("parses valid configuration", () => {
+    const { uploadDir, ...env } = parseEnv({
+      ...dev,
+      NODE_ENV: "development",
+      PORT: "8080",
+      CORS_ORIGIN: "https://app.example.com",
+      PHONE_DEFAULT_COUNTRY: "us",
+    });
+    assert.ok(isAbsolute(uploadDir) && uploadDir.endsWith("storage/uploads"), uploadDir);
     assert.deepEqual(
-      parseEnv({ ...dev, NODE_ENV: "development", PORT: "8080", CORS_ORIGIN: "https://app.example.com", PHONE_DEFAULT_COUNTRY: "us" }),
+      env,
       {
         nodeEnv: "development",
         port: 8080,
@@ -36,8 +52,42 @@ describe("parseEnv", () => {
         smsProvider: "mock",
         phoneDefaultCountry: "US",
         cookieSameSite: "lax",
+        ai: { url: "http://127.0.0.1:8000", secret: aiSecret, timeoutMs: 30_000 },
+        exifLocationToleranceKm: 2,
+        gpsAccuracyThresholdMeters: 100,
       },
     );
+  });
+
+  it("requires the AI service URL and a long, non-placeholder secret outside tests", () => {
+    assert.ok(hasProblem({ ...dev, AI_SERVICE_URL: undefined }, /AI_SERVICE_URL is required/));
+    assert.ok(hasProblem({ ...dev, AI_SERVICE_URL: "ftp://ai.local" }, /http:\/\/ or https:\/\//));
+    assert.ok(hasProblem({ ...dev, AI_SERVICE_URL: "http://user:pw@ai.local" }, /AI_SERVICE_URL must be/));
+    assert.ok(hasProblem({ ...dev, AI_SERVICE_SECRET: undefined }, /AI_SERVICE_SECRET is required/));
+    assert.ok(hasProblem({ ...dev, AI_SERVICE_SECRET: "short" }, /at least 32/));
+    assert.ok(hasProblem({ ...dev, AI_SERVICE_SECRET: "CHANGE_ME_" + "x".repeat(40) }, /placeholder/));
+    assert.equal(
+      parseEnv({ ...dev, NODE_ENV: "test", SMS_PROVIDER: undefined, AI_SERVICE_URL: undefined, AI_SERVICE_SECRET: undefined }).ai,
+      undefined,
+    );
+    assert.equal(parseEnv({ ...dev, AI_SERVICE_URL: "http://127.0.0.1:8000/" }).ai?.url, "http://127.0.0.1:8000");
+  });
+
+  it("parses the AI timeout, upload folder and location thresholds", () => {
+    const env = parseEnv({
+      ...dev,
+      AI_REQUEST_TIMEOUT_MS: "5000",
+      UPLOAD_DIR: "/srv/uploads",
+      EXIF_LOCATION_TOLERANCE_KM: "0.5",
+      GPS_ACCURACY_THRESHOLD_METERS: "50",
+    });
+    assert.equal(env.ai?.timeoutMs, 5000);
+    assert.equal(env.uploadDir, "/srv/uploads");
+    assert.equal(env.exifLocationToleranceKm, 0.5);
+    assert.equal(env.gpsAccuracyThresholdMeters, 50);
+    assert.ok(hasProblem({ ...dev, AI_REQUEST_TIMEOUT_MS: "1.5" }, /AI_REQUEST_TIMEOUT_MS/));
+    assert.ok(hasProblem({ ...dev, EXIF_LOCATION_TOLERANCE_KM: "-1" }, /EXIF_LOCATION_TOLERANCE_KM/));
+    assert.ok(hasProblem({ ...dev, GPS_ACCURACY_THRESHOLD_METERS: "0" }, /GPS_ACCURACY_THRESHOLD_METERS/));
   });
 
   it("defaults NODE_ENV to development, PORT to 3000 and COOKIE_SAMESITE to lax", () => {
@@ -119,6 +169,13 @@ describe("parseEnv", () => {
       assert.ok(error instanceof EnvValidationError);
       assert.ok(!error.message.includes("super-secret-value"));
       assert.ok(!error.message.includes("short-secret-xyz"));
+    }
+    try {
+      parseEnv({ ...dev, AI_SERVICE_SECRET: "tiny-ai-secret" });
+      assert.fail("expected parseEnv to throw");
+    } catch (error) {
+      assert.ok(error instanceof EnvValidationError);
+      assert.ok(!error.message.includes("tiny-ai-secret"));
     }
   });
 });

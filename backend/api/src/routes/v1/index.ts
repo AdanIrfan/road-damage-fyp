@@ -3,16 +3,18 @@ import { Router } from "express";
 import { createAuthController } from "../../controllers/auth.controller.js";
 import { createEngineersController } from "../../controllers/engineers.controller.js";
 import { createProfileController } from "../../controllers/profile.controller.js";
+import { createReportsController } from "../../controllers/reports.controller.js";
 import { createAuthenticate, requirePasswordChanged, requireRole } from "../../middleware/auth.js";
 import { createCsrf } from "../../middleware/csrf.js";
-import { createAuthRateLimiters } from "../../middleware/rateLimit.js";
+import { createAuthRateLimiters, createReportRateLimiter } from "../../middleware/rateLimit.js";
+import { uploadReportImage } from "../../middleware/upload.js";
 import type { Services } from "../../services/index.js";
 import type { CookieSettings } from "../../utils/authCookies.js";
 
 export interface V1Dependencies {
   services: Services;
   cookies: CookieSettings;
-  /** Per-IP rate limits on login/register/OTP. Disabled in tests. */
+  /** Per-IP rate limits on login/register/OTP and per-citizen limits on reports. Disabled in tests. */
   rateLimiting: boolean;
 }
 
@@ -22,7 +24,8 @@ export interface V1Dependencies {
  * Auth (public, CSRF-protected):  /auth/csrf, /auth/register, /auth/otp/verify, /auth/otp/resend,
  *                                 /auth/login, /auth/refresh, /auth/logout
  * Logged in (any role):           /auth/me, /profile, /profile/password
- * Admin only:                     /admin/engineers...
+ * Citizens:                       /reports (submit, list, summary, detail), /reports/:id/images/:imageId
+ * Admin only:                     /admin/engineers...  (+ any report image)
  *
  * Without dependencies (some tests) no application routes are mounted.
  */
@@ -40,6 +43,8 @@ export function createV1Router(deps?: V1Dependencies): Router {
   const auth = createAuthController({ auth: services.auth, csrf, cookies });
   const profile = createProfileController({ auth: services.auth, users: services.users, cookies });
   const engineers = createEngineersController({ engineers: services.engineers, auth: services.auth });
+  const reports = createReportsController({ reports: services.reports });
+  const reportLimit = createReportRateLimiter(deps.rateLimiting);
 
   router.use(cookieParser());
   // Every state-changing /api/v1 request needs a valid CSRF token (including login).
@@ -73,6 +78,17 @@ export function createV1Router(deps?: V1Dependencies): Router {
   adminRouter.patch("/engineers/:id", engineers.update);
   adminRouter.patch("/engineers/:id/status", engineers.setStatus);
   router.use("/admin", adminRouter);
+
+  // Order matters for uploads: authentication, role, CSRF (above) and the rate limit run BEFORE
+  // the multipart body is parsed.
+  const reportsRouter = Router();
+  reportsRouter.use(authenticate, requirePasswordChanged);
+  reportsRouter.post("/", requireRole("CITIZEN"), reportLimit, uploadReportImage, reports.create);
+  reportsRouter.get("/", requireRole("CITIZEN"), reports.list);
+  reportsRouter.get("/summary", requireRole("CITIZEN"), reports.summary);
+  reportsRouter.get("/:id", requireRole("CITIZEN"), reports.get);
+  reportsRouter.get("/:id/images/:imageId", requireRole("CITIZEN", "ADMIN"), reports.image);
+  router.use("/reports", reportsRouter);
 
   return router;
 }

@@ -13,6 +13,7 @@ interface NavItem {
 
 /** Navigation only shows what a role may use; the backend enforces the same rules. */
 const NAV_ITEMS: readonly NavItem[] = [
+  { to: "/reports", label: "My reports", roles: ["CITIZEN"] },
   { to: "/admin/engineers", label: "Engineers", roles: ["ADMIN"] },
   { to: "/profile", label: "My profile", roles: ["CITIZEN", "ADMIN", "ENGINEER"] },
 ];

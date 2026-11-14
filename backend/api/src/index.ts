@@ -3,8 +3,10 @@ import { createApp } from "./app.js";
 import { EnvValidationError, loadEnvFile, parseEnv } from "./config/env.js";
 import { createPrismaClient, type PrismaClient } from "./db/prisma.js";
 import { createDatabaseHealthCheck } from "./services/health.service.js";
+import { createHttpAiClient, unconfiguredAiClient } from "./services/ai/aiClient.js";
 import { createServices } from "./services/index.js";
 import { createSmsSender } from "./services/sms/index.js";
+import { createLocalFileStorage } from "./services/storage/fileStorage.js";
 
 /** Force the process to exit if a graceful shutdown takes longer than this. */
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -15,12 +17,23 @@ async function main(): Promise<void> {
 
   // Fails at startup (not on the first SMS) if the SMS configuration is not allowed.
   const sms = createSmsSender(env);
+  const storage = await createLocalFileStorage(env.uploadDir);
+  const ai =
+    env.ai === undefined
+      ? unconfiguredAiClient
+      : createHttpAiClient({ baseUrl: env.ai.url, secret: env.ai.secret, timeoutMs: env.ai.timeoutMs });
   const prisma = createPrismaClient(env.databaseUrl);
   const services = createServices({
     prisma,
     authSecret: env.authSecret,
     sms,
     phoneDefaultCountry: env.phoneDefaultCountry,
+    ai,
+    storage,
+    location: {
+      exifLocationToleranceKm: env.exifLocationToleranceKm,
+      gpsAccuracyThresholdMeters: env.gpsAccuracyThresholdMeters,
+    },
   });
   const app = createApp(
     {
@@ -48,6 +61,8 @@ async function main(): Promise<void> {
 
   console.log(`API listening on http://localhost:${env.port} (${env.nodeEnv})`);
   console.log(`CORS allowed origins: ${env.corsOrigins.join(", ")}`);
+  // Only the origin of the AI service is logged; the secret never is.
+  console.log(`AI service: ${env.ai === undefined ? "NOT CONFIGURED (analyses will fail)" : new URL(env.ai.url).origin}`);
   if (sms.providerName === "mock") {
     console.warn("SMS_PROVIDER=mock: SMS messages are NOT delivered; codes are printed to this console.");
   }

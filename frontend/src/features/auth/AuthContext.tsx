@@ -15,6 +15,20 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+let sessionCheck: Promise<{ user: User }> | undefined;
+
+/**
+ * GET /auth/me, shared by concurrent callers. React StrictMode mounts effects twice in
+ * development, which otherwise sends the check (and its expected 401 when logged out) twice.
+ * A 401 here is normal for visitors who are not logged in; the client then tries one refresh.
+ */
+function checkSession(): Promise<{ user: User }> {
+  sessionCheck ??= authApi.me().finally(() => {
+    sessionCheck = undefined;
+  });
+  return sessionCheck;
+}
+
 /**
  * Holds who is logged in. The session itself lives in httpOnly cookies; on page load the
  * provider asks the backend (GET /auth/me, refreshing the session if needed).
@@ -24,8 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    authApi
-      .me()
+    checkSession()
       .then(({ user }) => {
         if (!cancelled) setState({ status: "authenticated", user });
       })

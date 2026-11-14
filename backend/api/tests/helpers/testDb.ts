@@ -55,7 +55,8 @@ export function setupTestDatabase(): TestDatabase {
     prisma,
     reset: async () => {
       await prisma.$executeRawUnsafe(
-        `TRUNCATE TABLE "${TEST_SCHEMA}"."refresh_tokens", "${TEST_SCHEMA}"."otp_codes", "${TEST_SCHEMA}"."users" CASCADE`,
+        `TRUNCATE TABLE "${TEST_SCHEMA}"."ai_detections", "${TEST_SCHEMA}"."report_images", "${TEST_SCHEMA}"."report_status_history", ` +
+          `"${TEST_SCHEMA}"."reports", "${TEST_SCHEMA}"."refresh_tokens", "${TEST_SCHEMA}"."otp_codes", "${TEST_SCHEMA}"."users" CASCADE`,
       );
     },
     close: () => prisma.$disconnect(),

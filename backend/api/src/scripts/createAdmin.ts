@@ -8,85 +8,13 @@
  * password is never printed or stored anywhere except as an Argon2id hash.
  * Reads DATABASE_URL (and optional PHONE_DEFAULT_COUNTRY) from backend/api/.env.
  */
-import { createInterface } from "node:readline";
 import { isSupportedCountry } from "libphonenumber-js/max";
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from "../config/auth.js";
 import { loadEnvFile } from "../config/env.js";
 import { createPrismaClient } from "../db/prisma.js";
 import { AdminBootstrapError, createAdminAccount } from "../services/adminBootstrap.service.js";
 import { normalizeMobileNumber } from "../utils/phone.js";
-
-interface Prompter {
-  /** Reads one line. When `hidden`, typed characters are not echoed. */
-  ask: (question: string, hidden?: boolean) => Promise<string>;
-  close: () => void;
-}
-
-/**
- * Interactive terminal: reads keystrokes in raw mode so hidden input is never echoed.
- * Piped input (non-TTY): reads lines in order through readline's buffered async iterator.
- */
-function createPrompter(): Prompter {
-  if (!process.stdin.isTTY) {
-    const rl = createInterface({ input: process.stdin, terminal: false });
-    const lines = rl[Symbol.asyncIterator]();
-    return {
-      ask: async (question) => {
-        process.stdout.write(question);
-        const next = await lines.next();
-        process.stdout.write("\n");
-        if (next.done === true) {
-          throw new AdminBootstrapError("Input ended before all questions were answered.");
-        }
-        return next.value;
-      },
-      close: () => rl.close(),
-    };
-  }
-
-  const stdin = process.stdin;
-  return {
-    ask: (question, hidden = false) =>
-      new Promise<string>((resolve, reject) => {
-        process.stdout.write(question);
-        let value = "";
-        const finish = (): void => {
-          stdin.off("data", onData);
-          stdin.setRawMode(false);
-          stdin.pause();
-          process.stdout.write("\n");
-        };
-        const onData = (chunk: string): void => {
-          for (const char of chunk) {
-            if (char === "\r" || char === "\n") {
-              finish();
-              resolve(value);
-              return;
-            }
-            if (char === "\u0003") {
-              finish();
-              reject(new AdminBootstrapError("Cancelled."));
-              return;
-            }
-            if (char === "\u007f" || char === "\b") {
-              if (value.length > 0) {
-                value = value.slice(0, -1);
-                if (!hidden) process.stdout.write("\b \b");
-              }
-              continue;
-            }
-            value += char;
-            if (!hidden) process.stdout.write(char);
-          }
-        };
-        stdin.setRawMode(true);
-        stdin.setEncoding("utf8");
-        stdin.resume();
-        stdin.on("data", onData);
-      }),
-    close: () => undefined,
-  };
-}
+import { createTerminalPrompter, PromptError } from "./prompt.js";
 
 async function main(): Promise<void> {
   loadEnvFile();
@@ -98,7 +26,7 @@ async function main(): Promise<void> {
   const rawCountry = process.env["PHONE_DEFAULT_COUNTRY"]?.trim().toUpperCase() ?? "";
   const defaultCountry = rawCountry !== "" && isSupportedCountry(rawCountry) ? rawCountry : undefined;
 
-  const prompt = createPrompter();
+  const prompt = createTerminalPrompter();
   const prisma = createPrismaClient(databaseUrl);
   try {
     console.log(allowAdditional ? "Create an additional admin account" : "Create the first admin account");
@@ -130,6 +58,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  console.error(error instanceof AdminBootstrapError ? `Error: ${error.message}` : error);
+  console.error(error instanceof AdminBootstrapError || error instanceof PromptError ? `Error: ${error.message}` : error);
   process.exitCode = 1;
 });

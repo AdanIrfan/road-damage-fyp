@@ -3,12 +3,14 @@ import { Alert, Button, TextField } from "../../components/ui";
 import { ApiError, errorMessage, type FieldErrors } from "../../lib/api";
 import type { User } from "../../lib/types";
 import { firstError } from "../../utils/format";
+import { useCurrentUser } from "./AuthContext";
 import { profileApi } from "./authApi";
 
 const empty = { currentPassword: "", newPassword: "", confirmNewPassword: "" };
 
 /** Changing the password logs out other devices; this device gets a fresh session. */
 export function ChangePasswordForm({ onChanged, currentLabel = "Current password" }: { onChanged: (user: User) => void; currentLabel?: string }) {
+  const currentUser = useCurrentUser();
   const [form, setForm] = useState(empty);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
@@ -45,6 +47,9 @@ export function ChangePasswordForm({ onChanged, currentLabel = "Current password
     <form onSubmit={handleSubmit} className="space-y-4" noValidate>
       {error !== undefined && <Alert>{error}</Alert>}
       {success && <Alert tone="success">Password changed. Other devices have been logged out.</Alert>}
+      {/* Tells password managers (and assistive tech) which account this password belongs to.
+          Read-only and hidden; it is not part of the request. */}
+      <input type="text" name="username" autoComplete="username" value={currentUser.mobileNumber} readOnly hidden />
       <TextField label={currentLabel} type="password" autoComplete="current-password" value={form.currentPassword} onChange={update("currentPassword")} error={firstError(fieldErrors, "currentPassword")} required />
       <TextField label="New password" type="password" autoComplete="new-password" hint="At least 8 characters." value={form.newPassword} onChange={update("newPassword")} error={firstError(fieldErrors, "newPassword")} required />
       <TextField label="Confirm new password" type="password" autoComplete="new-password" value={form.confirmNewPassword} onChange={update("confirmNewPassword")} error={firstError(fieldErrors, "confirmNewPassword")} required />

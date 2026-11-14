@@ -5,6 +5,9 @@ import { ChangePasswordPage } from "../features/auth/ChangePasswordPage";
 import { LoginPage } from "../features/auth/LoginPage";
 import { RegisterPage } from "../features/auth/RegisterPage";
 import { VerifyOtpPage } from "../features/auth/VerifyOtpPage";
+import { CitizenDashboardPage } from "../features/citizen/CitizenDashboardPage";
+import { NewReportPage } from "../features/citizen/NewReportPage";
+import { ReportDetailPage } from "../features/citizen/ReportDetailPage";
 import { AppLayout } from "../layouts/AppLayout";
 import { NotFoundPage } from "../pages/NotFoundPage";
 import { ProfilePage } from "../pages/ProfilePage";
@@ -24,6 +27,11 @@ export function AppRoutes() {
         <Route element={<AppLayout />}>
           <Route index element={<HomeRedirect />} />
           <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/reports" element={<RequireRole roles={["CITIZEN"]} />}>
+            <Route index element={<CitizenDashboardPage />} />
+            <Route path="new" element={<NewReportPage />} />
+            <Route path=":id" element={<ReportDetailPage />} />
+          </Route>
           <Route path="/admin" element={<RequireRole roles={["ADMIN"]} />}>
             <Route path="engineers" element={<EngineersPage />} />
             <Route path="engineers/:id" element={<EngineerDetailPage />} />
