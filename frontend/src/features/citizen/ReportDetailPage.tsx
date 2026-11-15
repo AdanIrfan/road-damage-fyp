@@ -10,16 +10,17 @@ import {
   formatDistance,
   locationStatusHelp,
   locationStatusLabel,
+  repairProgressLabel,
   reportStatusLabel,
   reportStatusTone,
   severityLabel,
   severityTone,
-} from "./labels";
-import { LocationMap } from "./LocationMap";
-import { ReportPhoto } from "./ReportPhoto";
+} from "../../components/reports/labels";
+import { LocationMap } from "../../components/reports/LocationMap";
+import { ReportPhoto } from "../../components/reports/ReportPhoto";
 import { reportsApi } from "./reportsApi";
-import { SeverityNote } from "./SeverityNote";
-import type { Report } from "./types";
+import { SeverityNote } from "../../components/reports/SeverityNote";
+import type { Report } from "../../lib/reportTypes";
 
 export function ReportDetailPage() {
   const { id = "" } = useParams();
@@ -68,8 +69,20 @@ export function ReportDetailPage() {
                 {captureMethodLabel[report.captureMethod]} · submitted {formatDate(report.createdAt)}
               </p>
             </div>
-            <Badge tone={reportStatusTone[report.status]}>{reportStatusLabel[report.status]}</Badge>
+            <div className="flex flex-wrap gap-2">
+              <Badge tone={reportStatusTone[report.status]}>{reportStatusLabel[report.status]}</Badge>
+              {report.repairProgress !== null && report.status !== "COMPLETED" && (
+                <Badge tone="blue">{repairProgressLabel[report.repairProgress]}</Badge>
+              )}
+            </div>
           </div>
+
+          {report.decisionReason !== null && (
+            <Alert tone={report.status === "REJECTED" ? "error" : "info"}>
+              <strong>{report.status === "REJECTED" ? "Reason for rejection:" : "Reason for the delay:"}</strong> {report.decisionReason}
+            </Alert>
+          )}
+          {report.status === "COMPLETED" && <Alert tone="success">The damage you reported has been repaired. Thank you!</Alert>}
 
           <div className="grid gap-6 lg:grid-cols-5">
             <div className="space-y-6 lg:col-span-3">

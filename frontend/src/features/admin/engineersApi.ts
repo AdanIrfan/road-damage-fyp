@@ -1,5 +1,5 @@
 import { api } from "../../lib/api";
-import type { Paginated, User } from "../../lib/types";
+import type { EngineerAccount, Paginated, User } from "../../lib/types";
 
 export interface EngineerQuery {
   page: number;
@@ -13,9 +13,9 @@ export const engineersApi = {
     const params = new URLSearchParams({ page: String(query.page), pageSize: String(query.pageSize) });
     if (query.search !== undefined && query.search !== "") params.set("search", query.search);
     if (query.status !== undefined) params.set("status", query.status);
-    return api.get<Paginated<User>>(`/api/v1/admin/engineers?${params.toString()}`);
+    return api.get<Paginated<EngineerAccount>>(`/api/v1/admin/engineers?${params.toString()}`);
   },
-  get: (id: string) => api.get<{ engineer: User }>(`/api/v1/admin/engineers/${encodeURIComponent(id)}`),
+  get: (id: string) => api.get<{ engineer: EngineerAccount }>(`/api/v1/admin/engineers/${encodeURIComponent(id)}`),
   create: (input: { fullName: string; mobileNumber: string; temporaryPassword: string }) =>
     api.post<{ engineer: User }>("/api/v1/admin/engineers", input),
   update: (id: string, input: { fullName?: string; mobileNumber?: string }) =>

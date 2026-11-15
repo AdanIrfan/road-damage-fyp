@@ -9,12 +9,18 @@ interface NavItem {
   to: string;
   label: string;
   roles: readonly UserRole[];
+  /** Highlight only on this exact path (not on sub-pages). */
+  end?: boolean;
 }
 
 /** Navigation only shows what a role may use; the backend enforces the same rules. */
 const NAV_ITEMS: readonly NavItem[] = [
   { to: "/reports", label: "My reports", roles: ["CITIZEN"] },
+  { to: "/admin", label: "Dashboard", roles: ["ADMIN"], end: true },
+  { to: "/admin/reports", label: "Reports", roles: ["ADMIN"] },
   { to: "/admin/engineers", label: "Engineers", roles: ["ADMIN"] },
+  { to: "/engineer", label: "My jobs", roles: ["ENGINEER"], end: true },
+  { to: "/engineer/history", label: "History", roles: ["ENGINEER"] },
   { to: "/profile", label: "My profile", roles: ["CITIZEN", "ADMIN", "ENGINEER"] },
 ];
 
@@ -51,7 +57,7 @@ export function AppLayout() {
             </NavLink>
             <nav className="hidden gap-1 md:flex" aria-label="Main">
               {items.map((item) => (
-                <NavLink key={item.to} to={item.to} className={linkClass}>
+                <NavLink key={item.to} to={item.to} end={item.end === true} className={linkClass}>
                   {item.label}
                 </NavLink>
               ))}
@@ -82,7 +88,7 @@ export function AppLayout() {
           <div className="border-t border-slate-100 px-4 py-3 md:hidden">
             <nav className="space-y-1" aria-label="Main">
               {items.map((item) => (
-                <NavLink key={item.to} to={item.to} className={linkClass} onClick={() => setMenuOpen(false)}>
+                <NavLink key={item.to} to={item.to} end={item.end === true} className={linkClass} onClick={() => setMenuOpen(false)}>
                   {item.label}
                 </NavLink>
               ))}

@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Spinner } from "../../components/ui";
+import { Spinner } from "../ui";
 import { apiBlob, errorMessage } from "../../lib/api";
 import { damageClassLabel, formatConfidence } from "./labels";
-import type { Detection, ReportImage } from "./types";
+import type { Detection, ReportImage } from "../../lib/reportTypes";
 
 /**
  * A report photo loaded through the authorised API (never a public URL), with the AI's

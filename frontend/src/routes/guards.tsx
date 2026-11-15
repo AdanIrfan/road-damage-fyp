@@ -6,9 +6,9 @@ import type { User, UserRole } from "../lib/types";
 
 /** Where each role lands after logging in. */
 export function homePathFor(user: User): string {
-  if (user.role === "ADMIN") return "/admin/engineers";
+  if (user.role === "ADMIN") return "/admin";
   if (user.role === "CITIZEN") return "/reports";
-  return "/profile";
+  return "/engineer";
 }
 
 /** Logged-in users only. Accounts with a temporary password are sent to change it first. */

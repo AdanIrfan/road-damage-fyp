@@ -5,7 +5,7 @@ import { ApiError, errorMessage } from "../../lib/api";
 import { GalleryPicker } from "./GalleryPicker";
 import { LiveCameraCapture, type LiveCapture } from "./LiveCameraCapture";
 import { DESCRIPTION_MAX_LENGTH, reportsApi } from "./reportsApi";
-import type { CaptureMethod, Coordinates, ReportDraft } from "./types";
+import type { CaptureMethod, Coordinates, ReportDraft } from "../../lib/reportTypes";
 
 export function NewReportPage() {
   const navigate = useNavigate();

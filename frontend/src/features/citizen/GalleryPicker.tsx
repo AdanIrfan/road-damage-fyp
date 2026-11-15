@@ -1,8 +1,8 @@
 import { useEffect, useId, useState, type ChangeEvent } from "react";
 import { Alert } from "../../components/ui";
-import { LocationMap } from "./LocationMap";
+import { LocationMap } from "../../components/reports/LocationMap";
 import { ALLOWED_PHOTO_TYPES, MAX_PHOTO_BYTES } from "./reportsApi";
-import type { Coordinates } from "./types";
+import type { Coordinates } from "../../lib/reportTypes";
 
 interface GalleryPickerProps {
   photo: File | null;

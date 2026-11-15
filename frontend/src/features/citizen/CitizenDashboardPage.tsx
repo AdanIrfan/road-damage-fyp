@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
-import { Alert, Badge, Button, Card, Spinner } from "../../components/ui";
+import { Pagination } from "../../components/Pagination";
+import { Alert, Badge, Card, Spinner } from "../../components/ui";
 import { errorMessage } from "../../lib/api";
 import type { Paginated } from "../../lib/types";
 import { formatDate } from "../../utils/format";
@@ -9,13 +10,14 @@ import {
   captureMethodLabel,
   damageClassLabel,
   REPORT_STATUSES,
+  repairProgressLabel,
   reportStatusLabel,
   reportStatusTone,
   severityLabel,
   severityTone,
-} from "./labels";
+} from "../../components/reports/labels";
 import { reportsApi, type ReportQuery } from "./reportsApi";
-import type { ReportListItem, ReportStatus, ReportSummary } from "./types";
+import type { ReportListItem, ReportStatus, ReportSummary } from "../../lib/reportTypes";
 
 const PAGE_SIZE = 10;
 /** Statuses shown as tiles; the rest are included in the total. */
@@ -46,7 +48,6 @@ export function CitizenDashboardPage() {
     void load(query);
   }, [load, query]);
 
-  const totalPages = result === undefined ? 1 : Math.max(1, Math.ceil(result.total / result.pageSize));
 
   return (
     <div className="space-y-6">
@@ -148,6 +149,9 @@ export function CitizenDashboardPage() {
                           Est. {severityLabel[report.analysis.estimatedSeverity].toLowerCase()} severity
                         </Badge>
                       )}
+                      {report.repairProgress !== null && report.status !== "COMPLETED" && (
+                        <Badge tone="blue">{repairProgressLabel[report.repairProgress]}</Badge>
+                      )}
                       <Badge tone={reportStatusTone[report.status]}>{reportStatusLabel[report.status]}</Badge>
                     </div>
                   </Link>
@@ -157,20 +161,15 @@ export function CitizenDashboardPage() {
           )}
         </div>
 
-        {result !== undefined && result.total > 0 && (
-          <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4 text-sm text-slate-600">
-            <span>
-              {result.total} report{result.total === 1 ? "" : "s"} · page {result.page} of {totalPages}
-            </span>
-            <div className="flex gap-2">
-              <Button variant="secondary" className="px-3 py-1.5" disabled={query.page <= 1 || loading} onClick={() => setQuery((c) => ({ ...c, page: c.page - 1 }))}>
-                Previous
-              </Button>
-              <Button variant="secondary" className="px-3 py-1.5" disabled={query.page >= totalPages || loading} onClick={() => setQuery((c) => ({ ...c, page: c.page + 1 }))}>
-                Next
-              </Button>
-            </div>
-          </div>
+        {result !== undefined && (
+          <Pagination
+            page={result.page}
+            pageSize={result.pageSize}
+            total={result.total}
+            loading={loading}
+            noun="report"
+            onPage={(page) => setQuery((c) => ({ ...c, page }))}
+          />
         )}
       </Card>
     </div>

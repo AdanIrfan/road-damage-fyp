@@ -1,4 +1,13 @@
-import type { AiAnalysisStatus, CaptureMethod, LocationVerificationStatus, ReportStatus, SeverityLevel } from "./types";
+import type {
+  AiAnalysisStatus,
+  CaptureMethod,
+  LocationVerificationStatus,
+  RepairProgress,
+  RepairStatus,
+  RepairUpdateKind,
+  ReportStatus,
+  SeverityLevel,
+} from "../../lib/reportTypes";
 
 type Tone = "green" | "red" | "amber" | "slate" | "blue";
 
@@ -73,4 +82,36 @@ export function formatConfidence(confidence: number): string {
 
 export function formatDistance(meters: number): string {
   return meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(1)} km`;
+}
+
+export const repairStatusLabel: Record<RepairStatus, string> = {
+  PENDING: "Pending",
+  WORKING: "Working",
+  COMPLETED: "Completed",
+};
+
+export const repairStatusTone: Record<RepairStatus, Tone> = {
+  PENDING: "slate",
+  WORKING: "blue",
+  COMPLETED: "green",
+};
+
+export const repairProgressLabel: Record<RepairProgress, string> = {
+  NOT_ASSIGNED: "Repair not scheduled yet",
+  SCHEDULED: "Repair scheduled",
+  IN_PROGRESS: "Repair in progress",
+  AWAITING_CONFIRMATION: "Repair done, awaiting final check",
+  DONE: "Repaired",
+};
+
+export const repairUpdateKindLabel: Record<RepairUpdateKind, string> = {
+  STATUS_CHANGE: "Status change",
+  NOTE: "Note",
+  ADMIN_FEEDBACK: "Needs more work",
+};
+
+/** "Repair" status for admins: shows the current attempt as well. */
+export function repairStatusWithAttempt(status: RepairStatus | null, attempt: number | null): string {
+  if (status === null) return "Not assigned";
+  return attempt !== null && attempt > 1 ? `${repairStatusLabel[status]} (attempt ${attempt})` : repairStatusLabel[status];
 }

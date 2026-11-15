@@ -1,6 +1,7 @@
 import type { RequestHandler } from "express";
 import { rateLimit } from "express-rate-limit";
 import { REPORT_RATE_LIMIT } from "../config/reports.js";
+import { REPAIR_PHOTO_RATE_LIMIT } from "../config/workflow.js";
 import { HttpError } from "../utils/httpError.js";
 import { getAuthUser } from "./auth.js";
 
@@ -40,21 +41,31 @@ export function createAuthRateLimiters(enabled: boolean): AuthRateLimiters {
 }
 
 /**
- * Report submissions per citizen (keyed by user id, not IP, so citizens behind one network do
- * not share a limit). In memory, like the auth limiters. Must run after `authenticate`.
+ * Per-user limit (keyed by user id, not IP, so people behind one network do not share a limit).
+ * In memory, like the auth limiters. Must run after `authenticate`.
  */
-export function createReportRateLimiter(enabled: boolean): RequestHandler {
+function perUserLimiter(enabled: boolean, settings: { windowMinutes: number; limit: number }, message: string): RequestHandler {
   if (!enabled) {
     return passThrough;
   }
   return rateLimit({
-    windowMs: REPORT_RATE_LIMIT.windowMinutes * 60 * 1000,
-    limit: REPORT_RATE_LIMIT.limit,
+    windowMs: settings.windowMinutes * 60 * 1000,
+    limit: settings.limit,
     standardHeaders: "draft-8",
     legacyHeaders: false,
     keyGenerator: (req) => `user:${getAuthUser(req).id}`,
     handler: (_req, _res, next) => {
-      next(new HttpError(429, "TOO_MANY_REQUESTS", "You have submitted many reports recently. Please wait and try again."));
+      next(new HttpError(429, "TOO_MANY_REQUESTS", message));
     },
   });
+}
+
+/** Report submissions per citizen. */
+export function createReportRateLimiter(enabled: boolean): RequestHandler {
+  return perUserLimiter(enabled, REPORT_RATE_LIMIT, "You have submitted many reports recently. Please wait and try again.");
+}
+
+/** Repair photo uploads per engineer. */
+export function createRepairPhotoRateLimiter(enabled: boolean): RequestHandler {
+  return perUserLimiter(enabled, REPAIR_PHOTO_RATE_LIMIT, "You have uploaded many photos recently. Please wait and try again.");
 }

@@ -15,8 +15,13 @@ export const ALLOWED_ORIGIN = "http://localhost:5173";
 export class FakeSms implements SmsSender {
   readonly providerName = "fake";
   readonly messages: { to: string; message: string }[] = [];
+  /** When set, send() rejects with this error (simulates a provider failure). */
+  failWith: Error | undefined;
 
   send(to: string, message: string): Promise<void> {
+    if (this.failWith !== undefined) {
+      return Promise.reject(this.failWith);
+    }
     this.messages.push({ to, message });
     return Promise.resolve();
   }

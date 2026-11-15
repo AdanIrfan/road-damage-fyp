@@ -2,11 +2,12 @@
 
 **Project:** AI-Powered Road Infrastructure Damage Detection, Severity Assessment and Maintenance Management System
 **Type:** Final Year Project (FYP)
-**Status:** Phase 3 (citizen reporting and AI integration) implemented.
+**Status:** Stage 4 (admin and engineer dashboards and workflows) implemented — not yet committed.
 - **Phase 1 — backend foundation:** Express + TypeScript + Prisma, health endpoints, CORS, error handling, tests.
 - **Phase 2 — authentication and user management:** citizen registration with SMS OTP verification (mock SMS in development only), login/logout, cookie-based JWT sessions with refresh-token rotation, CSRF protection, role-based authorization, admin bootstrap CLI, admin engineer management, and the React frontend for all of these.
 - **Phase 3 — citizen reporting and AI integration:** report submission (live camera + browser GPS, or gallery upload + map pick), secure image storage (private original + metadata-free display copy), EXIF location verification, the Python + FastAPI AI service running the trained `best.pt`, Node-side estimated severity, the citizen dashboard (list, summary, detail with detection boxes and map), and tests (2026-11-14).
-- **Not implemented yet:** admin report review (accept/reject/delay, severity correction, admin report list), assignment, engineer repair workflows, chat, analytics, notifications other than the OTP SMS, duplicate detection, and a real SMS provider.
+- **Stage 4 — admin and engineer workflows (2026-11-14):** admin dashboard, report list (search/filter/paginate) and detail; Review / Accept / Reject / Delay / Keep delayed with reasons and status history; severity correction; engineer suggestions and (re)assignment; engineer dashboard, job detail, repair status per **repair attempt**, notes, repair photos (1–5 per attempt), work history; admin "needs more work" feedback and completion confirmation; citizen decision reason and repair progress; citizen SMS on Accepted/Rejected/Delayed/Completed (mock in development).
+- **Not implemented yet:** chat, analytics, priority, duplicate detection, notifications for admins/engineers, a real SMS provider.
 - **Model validation status:** only the `pothole` class has been exercised with a real photo (one Wikimedia Commons image, detected at confidence ≈ 0.69). `longitudinal_crack`, `transverse_crack` and `alligator_crack` have **not** been tested yet; they will be tested later with the owner's RDD2022 data. Never claim the model is validated for all four classes.
 
 This file is the main reference for anyone (human or AI) working in this repository. If anything here conflicts with an explicit instruction from the project owner, the owner's instruction wins. Update this file when decisions are made.
@@ -140,6 +141,11 @@ Implementation details (Phase 3):
 3. The engineer is notified. The report's assignment status is updated.
 4. The exact workload/availability formula must be agreed with the owner before it is implemented.
 
+Implementation (Stage 4, agreed 2026-11-14):
+- **Suggestion formula:** only ACTIVE engineers, sorted by open jobs (report ACCEPTED, repair PENDING or WORKING), fewest first, ties by name. There is no availability field. The admin makes the final choice. Engineers who still have a temporary password can be assigned (the UI warns); deactivated engineers cannot.
+- Assignment and reassignment are only possible while the report is `ACCEPTED`. Every (re)assignment starts a **new repair attempt** in its initial state `PENDING` and is recorded in `report_assignments` (engineer, previous engineer, admin, reason, attempt).
+- "Engineer is notified": no channel is decided (§14); the job appears on the engineer's dashboard. Assignment status (`ASSIGNED`/`UNASSIGNED`) is derived from `reports.assigned_engineer_id`.
+
 ### 3.5 Maintenance
 1. The engineer sees the assigned job: photos, map location, severity and details.
 2. The engineer updates the status: **Pending → Working → Completed**.
@@ -148,6 +154,15 @@ Implementation details (Phase 3):
 5. Admins monitor progress. The citizen receives SMS updates when key milestones are reached.
 6. When the engineer sets the repair status to **Completed**, the report status does **not** change automatically. An admin checks the repair and confirms it is complete; only then does the report status become `completed`, the final report status.
 7. Completed jobs appear in the engineer's history.
+
+Implementation (Stage 4, agreed 2026-11-14) — **repair attempts:**
+- Work on a job is organised in numbered attempts. `reports.repair_attempt` is the current attempt; every repair photo, repair update and assignment row stores the attempt it belongs to. Nothing is ever deleted or re-tagged.
+- A new attempt starts on first assignment (1), on reassignment (+1, PENDING, new engineer) and when the engineer **reopens** a Completed repair (COMPLETED → WORKING, +1). Nothing else changes it.
+- Repair status is changed **only by the assigned engineer**: PENDING → WORKING; WORKING → COMPLETED (needs ≥ 1 photo **of the current attempt**); COMPLETED → WORKING (reopen, while the report is still ACCEPTED). PENDING is never requested through the API.
+- Repair photos: 1–5 **per attempt**, only while the attempt is PENDING or WORKING (a Completed attempt is frozen evidence), same secure pipeline as citizen photos, no AI analysis. A reopened attempt or a new engineer can never rely on earlier photos.
+- Admin "**Needs more work**" feedback is allowed **only** when the report is ACCEPTED **and** the repair is COMPLETED (awaiting confirmation); it is a note on the current attempt and never changes repair status — the engineer reopens.
+- Admin **confirmation** (ACCEPTED + repair COMPLETED → report COMPLETED) names the attempt it confirms; a status-history note records it.
+- Engineer and admin actions send the attempt number shown on screen (`expectedAttempt`); a stale action is refused with 409.
 
 ### 3.6 Chat
 - One-to-one, WhatsApp-style chat between an admin and an engineer over WebSockets.
@@ -288,6 +303,13 @@ src/
 │   ├── adminBootstrap.service.ts  admin creation for the CLI script
 │   ├── password.service.ts  Argon2id hashing/verification
 │   ├── report.service.ts  report submission flow, citizen list/summary/detail, authorised image access
+│   ├── reportViews.ts     shared report selects/mappers (citizen view incl. decisionReason, repairProgress)
+│   ├── reportWorkflow.ts  pure Stage 4 rules: report transitions, repair transitions, attempts, SMS rule
+│   ├── adminReport.service.ts  admin list/detail/dashboard, review, decide (incl. keep delayed), severity, feedback, confirm
+│   ├── assignment.service.ts   engineer suggestions (agreed formula), assign/reassign (new attempt)
+│   ├── engineerJob.service.ts  engineer jobs: list/detail, repair status per attempt, notes, repair photos, photo access
+│   ├── repairViews.ts     repair attempts grouping (shared by admin and engineer views)
+│   ├── notification.service.ts citizen status SMS (after commit, never throws, masked logging)
 │   ├── severity.ts        estimateSeverity() (heuristic estimate)
 │   ├── ai/aiClient.ts     AiClient interface + HTTP client for the AI service (timeout, secret header, zod-validated response)
 │   ├── images/            detectImageType (magic bytes), processImage (sharp display copy)
@@ -325,11 +347,17 @@ src/
 ├── lib/types.ts                 User / role / status types (mirror the backend's public user)
 ├── features/auth/               AuthContext (who is logged in), authApi/profileApi, Login, Register, VerifyOtp,
 │                                ChangePasswordPage (forced for temporary passwords), ChangePasswordForm
-├── features/admin/              engineersApi, EngineersPage (list/search/filter/paginate/create/activate),
-│                                EngineerDetailPage (view/edit/activate), CreateEngineerForm
-├── features/citizen/            reportsApi, types, labels, CitizenDashboardPage (summary + list), NewReportPage,
-│                                LiveCameraCapture (getUserMedia + geolocation), GalleryPicker, LocationMap (react-leaflet),
-│                                ReportPhoto (authorised image + detection boxes), ReportDetailPage, SeverityNote
+├── features/admin/              engineersApi, EngineersPage (+ open jobs), EngineerDetailPage (+ workload, jobs), CreateEngineerForm,
+│                                adminReportsApi, AdminDashboardPage, AdminReportsPage (filters in the URL), AdminReportTable,
+│                                AdminReportDetailPage (action panel from server-side allowedActions), AssignEngineerDialog
+├── features/engineer/           engineerJobsApi, EngineerDashboardPage, EngineerJobList, EngineerJobDetailPage (attempt N,
+│                                photos per attempt, notes, reopen), EngineerHistoryPage
+├── features/citizen/            reportsApi, CitizenDashboardPage (summary + list), NewReportPage, LiveCameraCapture
+│                                (getUserMedia + geolocation), GalleryPicker, ReportDetailPage (decision reason, repair progress)
+├── components/reports/          shared: ReportPhoto, LocationMap (+ EXIF comparison point), SeverityNote, labels,
+│                                StatusTimeline, RepairAttempts, PhotoUploader
+├── components/                  ui.tsx, Pagination, Dialog (+ ReasonDialog)
+├── lib/reportTypes.ts           report/admin/engineer view types (mirror the backend)
 ├── lib/map.ts                   Leaflet CSS, marker icons, OSM tile URL/attribution
 ├── pages/                       ProfilePage (citizen/engineer/admin own profile), NotFoundPage
 ├── layouts/                     AuthLayout (login/register cards), AppLayout (role-aware navigation, logout)
@@ -398,6 +426,7 @@ src/
   - `otp_codes`: `user_id` (→ users, CASCADE), `purpose`, `code_hash` (HMAC, never the code), `expires_at`, `attempts`, `consumed_at`, `created_at`. Index on (`user_id`, `purpose`, `created_at`).
   - `refresh_tokens`: `user_id` (→ users, CASCADE), `token_hash` (**unique**, SHA-256), `family_id`, `expires_at`, `revoked_at`, `replaced_by_id` (→ refresh_tokens, unique), `created_at`. Indexes on `user_id`, `family_id`, `expires_at`.
   - Timestamps are `timestamptz(3)`; table/column names are snake_case (`@@map`/`@map`).
+- **Stage 4** migration `20261114180000_stage4_assignments_repairs` (owner reviewed the full SQL; additive only: enums `RepairStatus` (PENDING, WORKING, COMPLETED) and `RepairUpdateKind` (STATUS_CHANGE, NOTE, ADMIN_FEEDBACK); nullable `reports.assigned_engineer_id` (→ users, SET NULL), `assigned_at`, `repair_status`, `repair_status_updated_at`, `repair_attempt`; tables `report_assignments`, `repair_updates`, `repair_photos` (each with an `attempt` column; users RESTRICT so history cannot be lost; reports CASCADE); indexes; applied to `public` and `app_test` with `migrate deploy`).
 - **Phase 3** migration `20261114120000_citizen_reports` (additive only: 5 enum types, 4 tables, indexes, foreign keys; applied to `public` with `migrate deploy`):
   - Enums: `ReportStatus` (SUBMITTED, UNDER_REVIEW, ACCEPTED, REJECTED, DELAYED, COMPLETED), `CaptureMethod` (LIVE_CAMERA, GALLERY_UPLOAD), `LocationVerificationStatus` (VERIFIED, MISMATCH, NO_METADATA, NOT_CHECKED, BROWSER_GPS), `AiAnalysisStatus` (COMPLETED, FAILED), `SeverityLevel` (LOW, MEDIUM, HIGH).
   - `reports`: citizen (→ users, RESTRICT), status, capture method, description, `latitude`/`longitude` (DOUBLE PRECISION), `gps_accuracy_m`, `location_status`, `location_needs_review`, `exif_latitude`/`exif_longitude`/`exif_distance_m`, `ai_status`, `ai_error_code`, `ai_model`, `ai_analyzed_at`, `ai_severity`, `ai_severity_score`, `admin_severity`, `admin_severity_by_id` (→ users, SET NULL), `admin_severity_at`, timestamps. Indexes: (citizen_id, created_at), (status, created_at), ai_severity, created_at, (latitude, longitude).
@@ -413,6 +442,7 @@ src/
 - The client is generated by the `prisma-client` generator (ES modules) into `src/generated/prisma/` and imported from `src/generated/prisma/client.js`.
 - The app connects through the `PrismaPg` driver adapter, which owns the connection pool (5 s connection timeout). The `?schema=` URL parameter is read in `src/db/prisma.ts` and passed to the adapter, because the adapter does not read it from the URL.
 - Create **one** `PrismaClient` per process (in `src/index.ts`) and inject it; it is disconnected on shutdown.
+- **Do not use the array form `prisma.$transaction([...])` for read queries that load relations** (e.g. a page + count). Inside such a batch, Prisma 7's query engine loads relations in parallel on the transaction's single pg connection, which pg 8.23 reports as a deprecation ("Calling client.query() when the client is already executing a query") and pg 9 will reject. Use `Promise.all([...])` instead (READ COMMITTED gives no snapshot across statements anyway). Interactive transactions for writes are unaffected. Check with `NODE_OPTIONS=--throw-deprecation npm test` (found and fixed 2026-11-15 in the admin list, engineer job list/summary and citizen list).
 
 #### Database migration policy
 - **No schema change or migration without the owner's explicit approval.** Propose the model changes first.
@@ -490,11 +520,29 @@ Expectations:
   | `GET /reports?page&pageSize&status&sort` | CITIZEN | own reports only (pageSize ≤ 50, sort `newest`/`oldest`) |
   | `GET /reports/summary` | CITIZEN | `{ summary: { total, byStatus } }` |
   | `GET /reports/:id` | CITIZEN | own report (another citizen's report → 404) |
-  | `GET /reports/:id/images/:imageId` | CITIZEN (own), ADMIN (any) | metadata-free display JPEG, `Cache-Control: private, no-store` |
+  | `GET /reports/:id/images/:imageId` | CITIZEN (own), ADMIN (any), ENGINEER (assigned jobs) | metadata-free display JPEG, `Cache-Control: private, no-store` |
+  | `GET /reports/:id/repair-photos/:photoId` | ADMIN (any), ENGINEER (current job) | repair evidence photo |
+  | `GET /admin/dashboard` | ADMIN | counts by status / effective severity, work queues, recent reports |
+  | `GET /admin/reports?page&pageSize&sort&search&status&severity&from&to&captureMethod&locationStatus&needsLocationReview&aiStatus&damageClass&assignment&engineerId&repairStatus` | ADMIN | all reports (pageSize ≤ 50); `engineerId` lists an engineer's jobs |
+  | `GET /admin/reports/:id` | ADMIN | full detail incl. citizen, EXIF point, status/assignment history, repair attempts, `allowedActions`; read-only |
+  | `POST /admin/reports/:id/review` | ADMIN | SUBMITTED → UNDER_REVIEW |
+  | `POST /admin/reports/:id/decision` | ADMIN | `{ decision: ACCEPT\|REJECT\|DELAY, reason? }` from UNDER_REVIEW or DELAYED; reason required for REJECT/DELAY (also keep delayed) |
+  | `PATCH /admin/reports/:id/severity` | ADMIN | `{ severity }` (AI value kept) |
+  | `GET /admin/reports/:id/engineer-suggestions` | ADMIN | ranked engineers with open-job counts |
+  | `POST /admin/reports/:id/assignment` | ADMIN | `{ engineerId, reason? }` assign / reassign (new attempt) |
+  | `POST /admin/reports/:id/feedback` | ADMIN | `{ note, expectedAttempt }` only when ACCEPTED + repair COMPLETED |
+  | `POST /admin/reports/:id/confirm-completion` | ADMIN | `{ expectedAttempt, note? }` → COMPLETED |
+  | `GET /engineer/summary`, `GET /engineer/jobs?scope=active\|history` | ENGINEER | own jobs only |
+  | `GET /engineer/jobs/:reportId` | ENGINEER | own job (no citizen identity, no EXIF) |
+  | `PATCH /engineer/jobs/:reportId/repair-status` | ENGINEER | `{ status: WORKING\|COMPLETED, expectedAttempt, note? }` |
+  | `POST /engineer/jobs/:reportId/notes` | ENGINEER | `{ note, expectedAttempt }` |
+  | `POST /engineer/jobs/:reportId/photos` | ENGINEER | multipart `image` + `expectedAttempt`; 30/hour per engineer |
 
   Citizen report responses never contain storage keys, EXIF coordinates, SHA-256 hashes or admin fields.
 
   Main error codes: `VALIDATION_ERROR` (400, `details.fields` per field), `INVALID_CREDENTIALS`, `UNAUTHENTICATED`, `TOKEN_EXPIRED`, `SESSION_INVALID` (401), `FORBIDDEN`, `ACCOUNT_NOT_VERIFIED`, `ACCOUNT_DEACTIVATED`, `PASSWORD_CHANGE_REQUIRED`, `CSRF_TOKEN_INVALID`, `CORS_ORIGIN_NOT_ALLOWED` (403), `ENGINEER_NOT_FOUND` (404), `MOBILE_ALREADY_REGISTERED` (409), `OTP_INVALID`, `OTP_EXPIRED`, `OTP_ATTEMPTS_EXCEEDED` (400), `OTP_RESEND_TOO_SOON`, `OTP_RESEND_LIMIT`, `TOO_MANY_REQUESTS` (429, with `details.retryAfterSeconds` for OTP), `SMS_UNAVAILABLE` (503).
+  Stage 4 adds: `REPORT_STATE_CONFLICT`, `INVALID_TRANSITION`, `REPAIR_PHOTO_REQUIRED`, `REPAIR_PHOTO_LIMIT` (409), `ENGINEER_NOT_ASSIGNABLE` (400), `JOB_NOT_FOUND`, `REPAIR_PHOTO_NOT_FOUND` (404). Admin action responses include `notification: "sent" | "failed"` when a citizen SMS was due.
+  **SMS rules (Stage 4):** sent only after the transaction commits, only by the request whose state-checked update matched (no duplicates from concurrent or retried decisions), only when the status actually changes to ACCEPTED/REJECTED/DELAYED/COMPLETED (no SMS for Review, keep-delayed, severity, assignment, feedback); failures are logged with a masked number and never undo the decision. Known limitation: a crash between commit and send loses that SMS (no outbox).
   Phase 3 adds: `REPORT_NOT_FOUND`, `IMAGE_NOT_FOUND` (404), `IMAGE_REQUIRED`, `IMAGE_INVALID`, `UNEXPECTED_FIELD`, `INVALID_MULTIPART`, `MULTIPART_REQUIRED` (400), `FILE_TOO_LARGE`, `IMAGE_DIMENSIONS_TOO_LARGE` (413), `UNSUPPORTED_IMAGE_TYPE` (415).
 - Use JSON. Validate every request in the main backend with **zod** (`src/validation/schemas.ts`, adopted in Phase 2). Never return internal fields such as password hashes, OTP hashes or refresh-token hashes.
 - Use correct HTTP status codes and a consistent error format.
@@ -686,6 +734,9 @@ Frontend (`frontend/.env`, optional): `VITE_API_BASE_URL` (empty in development;
   - Phase 3: severity formula, haversine, location verification, magic-byte detection, EXIF GPS reading (hand-built EXIF), metadata stripping, storage key validation; the HTTP AI client against a local fake server (success, secret header, unreachable, timeout, 4xx/5xx, malformed JSON, wrong shapes, oversized); report API tests (roles, CSRF, validation, disguised/corrupt/oversized files, VERIFIED/MISMATCH/NO_METADATA/BROWSER_GPS, detections + severity stored, AI failure → FAILED, size mismatch, private originals, metadata-free display copy, image access per role, no leaked fields, file cleanup, list/summary/pagination/filters, 10/hour rate limit).
   - Fakes: `FakeSms` captures OTP messages; `TestClock` simulates expiry; `FakeAiClient` replaces the AI service; uploads go to a temporary folder.
 - **AI service tests** (`backend/ai/tests/`, pytest): service key, response shape, configured thresholds, JPEG/PNG accepted, non-images/other formats/too large/too many pixels rejected, secret validation, clear error for missing weights; `test_real_model.py` loads the real `best.pt` and runs inference on a blank image (skipped when the weights are absent; it checks output format only, **not** accuracy).
+- **Stage 4 tests:** `reportWorkflow.test.ts` (all transitions, attempts, SMS rule), `adminReports.test.ts` (authorization matrix, review/decisions, reasons, keep delayed, concurrent/retried decisions with one SMS, SMS failure, severity, filters, dashboard), `assignments.test.ts` (assign/reassign attempts, not assignable, concurrency, suggestions, workload), `engineerJobs.test.ts` (full rework loop with attempt 2, per-attempt photo cap with parallel uploads, feedback rule, reassignment evidence and access, isolation, stale attempts, temporary passwords, no citizen identity/EXIF for engineers, history photo access, simultaneous confirm vs reopen, deactivated engineer + reassignment, repair-photo upload rate limit 30/hour). Backend total: 173 tests.
+- **Stage 4 browser verification (T12, 2026-11-14, scripted headless Chrome, each role in its own browser context, real AI service, `app_test`):** role home pages; empty and error states; review → accept (SMS) → assign → engineer attempt 1 with photo and note → feedback → reopen as attempt 2 (photo required again) → confirm (SMS) → citizen sees "repaired" and engineer history; severity override + filter; reject with required reason; delay → keep delayed (no SMS, citizen sees the new reason) → accept; reassignment (new attempt, old engineer locked out); no horizontal overflow at 390 px on six key pages. Stage 3 browser regression (sessions, two-tab refresh, maps, GPS cases, logout) also passed.
+- **Owner's manual browser test (reported 2026-11-15):** the full workflow passed — citizen report submission; admin review, acceptance and severity override; engineer assignment; engineer start, photos, notes and completion; admin "Needs more work"; engineer reopen and completion of repair attempt 2; admin final confirmation; status history Accepted → Completed with attempt 2 confirmed. Not reported as manually tested: reject, delay/keep delayed, reassignment, phone-width layout, real phone camera/GPS.
 - **Manual end-to-end verification (2026-11-14):** real AI service + API (against `app_test`) + the Wikimedia Commons photo `Potholes.jpg`: 1 `pothole` detection at confidence ≈ 0.689, estimated severity LOW; location MISMATCH vs a far location, VERIFIED (≈ 334 m) near the photo's own EXIF position; with the AI service stopped the report was saved as FAILED. Only the pothole class has been exercised.
 - **Frontend:** no automated tests yet (tool still undecided). Phase 2 was verified end to end through the Vite dev proxy with HTTP requests (pages served, all auth flows, cookies, roles). Phase 3 citizen pages were checked on 2026-11-14 in headless Chrome (Windows) driven over the DevTools protocol from scratch scripts (not committed): login/redirects, expired-token refresh, simultaneous refresh in two tabs, gallery and detail maps (tiles + markers), live camera with Chrome's fake camera and emulated geolocation (coarse → precise, poor accuracy flagged, unavailable, denied + retry), favicon. Real device GPS accuracy and a real camera still need a manual test on a phone.
 - **AI service:** pytest (in use since Phase 3). Mock the model in unit tests so they don't need `best.pt`. If inference integration tests exist, skip them clearly when the weights are missing.
@@ -715,7 +766,7 @@ Frontend (`frontend/.env`, optional): `VITE_API_BASE_URL` (empty in development;
 - [x] Default EXIF location tolerance — 2 km, `EXIF_LOCATION_TOLERANCE_KM` (2026-11-14)
 - [x] Browser GPS accuracy threshold — 100 m, `GPS_ACCURACY_THRESHOLD_METERS` (2026-11-14)
 - [x] Severity heuristic formula and thresholds — weighted score, §6 (2026-11-14)
-- [ ] Engineer workload/availability formula
+- [x] Engineer workload/availability formula — active engineers by open-job count, no availability field (2026-11-14)
 - [ ] Priority definition (derived from severity? set manually by the admin?)
 - [ ] Duplicate-report detection rule (distance + time window?)
 - [ ] Notification channel for admins and engineers (no in-app channel is confirmed)
@@ -724,7 +775,7 @@ Frontend (`frontend/.env`, optional): `VITE_API_BASE_URL` (empty in development;
 - [ ] How engineers receive their temporary password (currently: admin sets it and shares it privately) — or an SMS/link-based account setup once SMS works
 - [ ] Admin management of citizen and admin accounts through the API (only engineer management is implemented)
 - [ ] Rate-limit storage and `trust proxy` setting for deployment (current limiter is in-memory, per IP)
-- [ ] Whether Reject and Delay require a reason (proposed)
+- [x] Reject and Delay require a reason; Accept takes an optional note (2026-11-14)
 - [ ] Proposed convention to confirm: feature branches
 - [ ] Frontend state management and testing tools; main backend testing tool (`node:test` currently in use — confirm); AI service testing tool (pytest in use — confirm)
 - [ ] WebSocket library and API documentation approach for the main backend (request validation: zod, adopted in Phase 2)

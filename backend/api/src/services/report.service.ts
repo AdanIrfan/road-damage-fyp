@@ -1,13 +1,6 @@
 import { createHash } from "node:crypto";
 import type { PrismaClient } from "../db/prisma.js";
-import type {
-  AiAnalysisStatus,
-  CaptureMethod,
-  LocationVerificationStatus,
-  Prisma,
-  ReportStatus,
-  SeverityLevel,
-} from "../generated/prisma/client.js";
+import type { CaptureMethod, Prisma, ReportStatus } from "../generated/prisma/client.js";
 import { HttpError } from "../utils/httpError.js";
 import { AiServiceError, type AiAnalysis, type AiClient, type AiErrorKind } from "./ai/aiClient.js";
 import type { Clock } from "./clock.js";
@@ -15,6 +8,14 @@ import { detectImageType } from "./images/detectImageType.js";
 import { createDisplayCopy, type DisplayImage } from "./images/processImage.js";
 import { readExifGps } from "./location/exifGps.js";
 import { verifyGalleryLocation, verifyLiveLocation, type LocationCheck } from "./location/verifyLocation.js";
+import {
+  reportDetailSelect,
+  reportListSelect,
+  toReportListItem,
+  toReportView,
+  type ReportListItem,
+  type ReportView,
+} from "./reportViews.js";
 import { estimateSeverity } from "./severity.js";
 import type { FileStorage } from "./storage/fileStorage.js";
 import type { PublicUser } from "./user.service.js";
@@ -39,66 +40,7 @@ export interface ReportListQuery {
   pageSize: number;
 }
 
-export interface ReportImageView {
-  id: string;
-  /** Authorised API URL of the metadata-free display copy. */
-  url: string;
-  width: number;
-  height: number;
-}
-
-export interface DetectionView {
-  id: string;
-  className: string;
-  confidence: number;
-  /** Pixels of the display image. */
-  box: { x1: number; y1: number; x2: number; y2: number };
-  areaFraction: number;
-}
-
-/** What a citizen sees about their own report. No storage keys, EXIF coordinates or admin fields. */
-export interface ReportView {
-  id: string;
-  status: ReportStatus;
-  captureMethod: CaptureMethod;
-  description: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-  location: {
-    latitude: number;
-    longitude: number;
-    gpsAccuracyMeters: number | null;
-    verificationStatus: LocationVerificationStatus;
-    needsReview: boolean;
-    exifDistanceMeters: number | null;
-  };
-  analysis: {
-    status: AiAnalysisStatus;
-    analyzedAt: Date | null;
-    model: string | null;
-    /** Heuristic estimate, not an engineering measurement. Null if no damage was detected or analysis failed. */
-    estimatedSeverity: SeverityLevel | null;
-    severityScore: number | null;
-    detections: DetectionView[];
-  };
-  image: ReportImageView | null;
-}
-
-export interface ReportListItem {
-  id: string;
-  status: ReportStatus;
-  captureMethod: CaptureMethod;
-  description: string | null;
-  createdAt: Date;
-  location: { latitude: number; longitude: number; verificationStatus: LocationVerificationStatus; needsReview: boolean };
-  analysis: {
-    status: AiAnalysisStatus;
-    estimatedSeverity: SeverityLevel | null;
-    detectionCount: number;
-    damageClasses: string[];
-  };
-  image: ReportImageView | null;
-}
+export type { DetectionView, ReportImageView, ReportListItem, ReportView } from "./reportViews.js";
 
 export interface ReportList {
   items: ReportListItem[];
@@ -118,7 +60,7 @@ export interface ReportService {
   listForCitizen(citizenId: string, query: ReportListQuery): Promise<ReportList>;
   getForCitizen(citizenId: string, reportId: string): Promise<ReportView>;
   summaryForCitizen(citizenId: string): Promise<ReportSummary>;
-  /** Display copy of a report image: citizens only their own reports, admins any report. */
+  /** Display copy of a report image: citizens their own reports, engineers their assigned jobs, admins any report. */
   getImage(user: PublicUser, reportId: string, imageId: string): Promise<Buffer>;
 }
 
@@ -134,49 +76,6 @@ const REPORT_STATUS_VALUES: readonly ReportStatus[] = ["SUBMITTED", "UNDER_REVIE
 
 const reportNotFound = (): HttpError => new HttpError(404, "REPORT_NOT_FOUND", "Report not found.");
 
-const reportDetailSelect = {
-  id: true,
-  status: true,
-  captureMethod: true,
-  description: true,
-  latitude: true,
-  longitude: true,
-  gpsAccuracyM: true,
-  locationStatus: true,
-  locationNeedsReview: true,
-  exifDistanceM: true,
-  aiStatus: true,
-  aiModel: true,
-  aiAnalyzedAt: true,
-  aiSeverity: true,
-  aiSeverityScore: true,
-  createdAt: true,
-  updatedAt: true,
-  images: { select: { id: true, width: true, height: true }, orderBy: { createdAt: "asc" } },
-  detections: {
-    select: { id: true, className: true, confidence: true, x1: true, y1: true, x2: true, y2: true, areaFraction: true },
-    orderBy: { confidence: "desc" },
-  },
-} satisfies Prisma.ReportSelect;
-
-const reportListSelect = {
-  id: true,
-  status: true,
-  captureMethod: true,
-  description: true,
-  latitude: true,
-  longitude: true,
-  locationStatus: true,
-  locationNeedsReview: true,
-  aiStatus: true,
-  aiSeverity: true,
-  createdAt: true,
-  images: { select: { id: true, width: true, height: true }, orderBy: { createdAt: "asc" } },
-  detections: { select: { className: true } },
-} satisfies Prisma.ReportSelect;
-
-type ReportDetailRow = Prisma.ReportGetPayload<{ select: typeof reportDetailSelect }>;
-type ReportListRow = Prisma.ReportGetPayload<{ select: typeof reportListSelect }>;
 
 type AnalysisOutcome =
   | { ok: true; analysis: AiAnalysis }
@@ -312,7 +211,9 @@ export function createReportService(deps: ReportServiceDependencies): ReportServ
 
     listForCitizen: async (citizenId, { status, sort, page, pageSize }) => {
       const where: Prisma.ReportWhereInput = { citizenId, ...(status === undefined ? {} : { status }) };
-      const [rows, total] = await prisma.$transaction([
+      // Not an array $transaction: inside one, Prisma 7 loads relations in parallel on a single pg
+      // connection (pg 8.23 deprecation, an error in pg 9). READ COMMITTED gives no snapshot anyway.
+      const [rows, total] = await Promise.all([
         prisma.report.findMany({
           where,
           select: reportListSelect,
@@ -340,11 +241,15 @@ export function createReportService(deps: ReportServiceDependencies): ReportServ
     },
 
     getImage: async (user, reportId, imageId) => {
-      if (user.role !== "CITIZEN" && user.role !== "ADMIN") {
-        throw new HttpError(403, "FORBIDDEN", "You do not have permission to do this.");
-      }
+      // Citizens: their own reports. Engineers: jobs currently assigned to them. Admins: any report.
+      const access: Prisma.ReportImageWhereInput =
+        user.role === "ADMIN"
+          ? {}
+          : user.role === "CITIZEN"
+            ? { report: { citizenId: user.id } }
+            : { report: { assignedEngineerId: user.id, status: { in: ["ACCEPTED", "COMPLETED"] } } };
       const image = await prisma.reportImage.findFirst({
-        where: { id: imageId, reportId, ...(user.role === "ADMIN" ? {} : { report: { citizenId: user.id } }) },
+        where: { id: imageId, reportId, ...access },
         select: { displayKey: true },
       });
       if (image === null) {
@@ -352,69 +257,5 @@ export function createReportService(deps: ReportServiceDependencies): ReportServ
       }
       return storage.read(image.displayKey);
     },
-  };
-}
-
-function imageView(reportId: string, image: { id: string; width: number; height: number } | undefined): ReportImageView | null {
-  if (image === undefined) {
-    return null;
-  }
-  return { id: image.id, url: `/api/v1/reports/${reportId}/images/${image.id}`, width: image.width, height: image.height };
-}
-
-function toReportView(row: ReportDetailRow): ReportView {
-  return {
-    id: row.id,
-    status: row.status,
-    captureMethod: row.captureMethod,
-    description: row.description,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    location: {
-      latitude: row.latitude,
-      longitude: row.longitude,
-      gpsAccuracyMeters: row.gpsAccuracyM,
-      verificationStatus: row.locationStatus,
-      needsReview: row.locationNeedsReview,
-      exifDistanceMeters: row.exifDistanceM,
-    },
-    analysis: {
-      status: row.aiStatus,
-      analyzedAt: row.aiAnalyzedAt,
-      model: row.aiModel,
-      estimatedSeverity: row.aiSeverity,
-      severityScore: row.aiSeverityScore,
-      detections: row.detections.map((d) => ({
-        id: d.id,
-        className: d.className,
-        confidence: d.confidence,
-        box: { x1: d.x1, y1: d.y1, x2: d.x2, y2: d.y2 },
-        areaFraction: d.areaFraction,
-      })),
-    },
-    image: imageView(row.id, row.images[0]),
-  };
-}
-
-function toReportListItem(row: ReportListRow): ReportListItem {
-  return {
-    id: row.id,
-    status: row.status,
-    captureMethod: row.captureMethod,
-    description: row.description,
-    createdAt: row.createdAt,
-    location: {
-      latitude: row.latitude,
-      longitude: row.longitude,
-      verificationStatus: row.locationStatus,
-      needsReview: row.locationNeedsReview,
-    },
-    analysis: {
-      status: row.aiStatus,
-      estimatedSeverity: row.aiSeverity,
-      detectionCount: row.detections.length,
-      damageClasses: [...new Set(row.detections.map((d) => d.className))].sort(),
-    },
-    image: imageView(row.id, row.images[0]),
   };
 }

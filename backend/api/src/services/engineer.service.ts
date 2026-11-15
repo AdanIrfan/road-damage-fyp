@@ -12,8 +12,20 @@ export interface EngineerListQuery {
   pageSize: number;
 }
 
+/** Stage 4 workload figures shown to admins. */
+export interface EngineerWorkload {
+  /** Report ACCEPTED, repair PENDING or WORKING. */
+  openJobs: number;
+  /** Repair COMPLETED, waiting for an admin to confirm. */
+  awaitingConfirmation: number;
+  /** Reports COMPLETED while assigned to this engineer. */
+  completedJobs: number;
+}
+
+export type EngineerWithWorkload = PublicUser & { workload: EngineerWorkload };
+
 export interface EngineerList {
-  items: PublicUser[];
+  items: EngineerWithWorkload[];
   page: number;
   pageSize: number;
   total: number;
@@ -21,7 +33,7 @@ export interface EngineerList {
 
 export interface EngineerService {
   list(query: EngineerListQuery): Promise<EngineerList>;
-  get(id: string): Promise<PublicUser>;
+  get(id: string): Promise<EngineerWithWorkload>;
   /** `mobileNumber` must already be normalized (E.164). */
   create(adminId: string, input: { fullName: string; mobileNumber: string; temporaryPassword: string }): Promise<PublicUser>;
   update(id: string, input: { fullName?: string | undefined; mobileNumber?: string | undefined }): Promise<PublicUser>;
@@ -38,6 +50,28 @@ function isUniqueViolation(error: unknown): boolean {
 
 export function createEngineerService(deps: { prisma: PrismaClient; tokens: TokenService }): EngineerService {
   const { prisma, tokens } = deps;
+
+  const workloads = async (ids: readonly string[]): Promise<Map<string, EngineerWorkload>> => {
+    const groups = await prisma.report.groupBy({
+      by: ["assignedEngineerId", "status", "repairStatus"],
+      where: { assignedEngineerId: { in: [...ids] }, status: { in: ["ACCEPTED", "COMPLETED"] } },
+      _count: { _all: true },
+    });
+    const result = new Map(ids.map((id) => [id, { openJobs: 0, awaitingConfirmation: 0, completedJobs: 0 }]));
+    for (const g of groups) {
+      const w = g.assignedEngineerId === null ? undefined : result.get(g.assignedEngineerId);
+      if (w === undefined) continue;
+      if (g.status === "COMPLETED") w.completedJobs += g._count._all;
+      else if (g.repairStatus === "COMPLETED") w.awaitingConfirmation += g._count._all;
+      else w.openJobs += g._count._all;
+    }
+    return result;
+  };
+
+  const withWorkload = async (users: PublicUser[]): Promise<EngineerWithWorkload[]> => {
+    const map = await workloads(users.map((u) => u.id));
+    return users.map((u) => ({ ...u, workload: map.get(u.id) ?? { openJobs: 0, awaitingConfirmation: 0, completedJobs: 0 } }));
+  };
 
   const requireEngineer = async (id: string): Promise<void> => {
     const found = await prisma.user.findFirst({ where: { id, role: "ENGINEER" }, select: { id: true } });
@@ -70,7 +104,7 @@ export function createEngineerService(deps: { prisma: PrismaClient; tokens: Toke
         }),
         prisma.user.count({ where }),
       ]);
-      return { items, page, pageSize, total };
+      return { items: await withWorkload(items), page, pageSize, total };
     },
 
     get: async (id) => {
@@ -78,7 +112,8 @@ export function createEngineerService(deps: { prisma: PrismaClient; tokens: Toke
       if (engineer === null) {
         throw notFound();
       }
-      return engineer;
+      const [withCounts] = await withWorkload([engineer]);
+      return withCounts ?? { ...engineer, workload: { openJobs: 0, awaitingConfirmation: 0, completedJobs: 0 } };
     },
 
     create: async (adminId, input) => {

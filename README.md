@@ -6,9 +6,9 @@ A Final Year Project web application that connects three groups:
 - **Administrators**, who check reports and assign repair work
 - **Maintenance engineers**, who carry out repairs and report their progress
 
-A YOLOv8 model, already trained on the RDD2022 road damage dataset, will analyse each uploaded photograph. It returns the damage class, a confidence score and bounding boxes, which the system uses to make an initial severity estimate.
+A YOLOv8 model, already trained on the RDD2022 road damage dataset, analyses each uploaded photograph. It returns the damage class, a confidence score and bounding boxes, which the system uses to make an initial severity estimate.
 
-> **Project status:** Phase 2 — **authentication and user management are implemented** (backend + frontend). Road-damage reporting, AI inference, report review, repair workflows, chat, maps and analytics are **not implemented yet**; they are listed under "Planned features". See [What works today](#what-works-today).
+> **Project status:** Stage 4 — authentication (Phase 2), citizen reporting with AI analysis (Stage 3) and the **admin and engineer workflows** (Stage 4) are implemented. Chat and analytics are **not implemented yet**. See [What works today](#what-works-today) and [Known limitations](#known-limitations).
 
 ## Purpose
 
@@ -55,7 +55,7 @@ The application has three main parts:
 
 A typical report flows like this: the citizen submits a photo through the frontend → the main backend checks the location and sends the image to the AI service → the AI service returns detections → the main backend estimates severity, stores the report in PostgreSQL and shows the result to the citizen.
 
-> The exact way the main backend and the AI service communicate, and which service calculates severity, are **not decided yet**.
+The main backend calls the AI service over an internal URL (`AI_SERVICE_URL`) with a shared secret header; the browser never talks to the AI service. Severity is calculated by the main backend.
 
 ## What works today
 
@@ -71,7 +71,28 @@ A typical report flows like this: the citizen submits a photo through the fronte
 - **Role-based access** enforced by the backend: citizens and engineers cannot use admin functions.
 - **Health checks:** `GET /api/health` and `GET /api/health/db`.
 
-## Planned features
+**Citizen reporting and AI analysis (Stage 3):**
+
+- Report road damage with **Live camera** (photo + device GPS, accuracy shown) or **Gallery upload** (photo + location picked on an OpenStreetMap map).
+- Photos are checked by content (JPEG/PNG, max 10 MB). The original is kept privately; users only ever see a copy with all metadata removed.
+- Location check: gallery photos' EXIF GPS is compared with the chosen location (2 km tolerance); live-camera reports with GPS accuracy worse than 100 m are flagged. Nothing is rejected automatically.
+- The AI service (YOLOv8 `best.pt`) returns detections; the backend stores them and computes an **estimated** severity. If the AI service is unavailable the report is still saved ("analysis unavailable").
+- Citizen dashboard: own reports, status, damage found, estimated severity, map and photo with detection boxes.
+
+**Admin and engineer workflows (Stage 4):**
+
+- **Admin dashboard:** totals by status and severity, work queues (new, under review, delayed, to assign, in progress, awaiting confirmation) and recent reports.
+- **Admin reports:** search, filter (status, severity, dates, assignment, repair status, location check, analysis, capture method), sort and paginate; detail page with photo, AI results, map with the photo's EXIF point, citizen, status history and repair work.
+- **Review and decisions:** Start review → Accept (optional note) / Reject (reason required) / Delay (reason required). A delayed report can be accepted, rejected or kept delayed with a new reason. Admins can correct the severity (the AI estimate is kept).
+- **Assignment:** engineers are suggested by open-job count (fewest first); admins assign and reassign accepted reports.
+- **Engineer dashboard:** own jobs, job detail (photo, AI results, severity, map — no citizen identity), repair status **Pending → Working → Completed**, progress notes, repair photos, work history.
+- **Repair attempts:** each attempt needs 1–5 repair photos of its own before it can be marked Completed. If an admin asks for more work, the engineer reopens the repair, which starts a new attempt (new photos required). Reassignment also starts a new attempt. Earlier photos and notes are always kept.
+- **Completion:** the engineer's Completed status does not finish the report; an admin checks the current attempt and confirms, and only then is the report `completed`.
+- **Citizen updates:** the citizen sees rejection/delay reasons and repair progress, and gets an SMS when the report is accepted, rejected, delayed or completed (mock SMS in development).
+
+## Feature plan
+
+The original plan is below. Everything in it is implemented **except**: admin–engineer chat, dashboard charts/analytics, and notifications for admins and engineers (the channel is not decided). Citizens' SMS uses the development mock sender until a provider is chosen.
 
 ### Citizen
 - Self-registration with mobile number verification (by SMS code)
@@ -110,15 +131,16 @@ Each report has a **report status**, managed by admins:
 
 `submitted` → `under_review` → `accepted` / `rejected` / `delayed` → … → `completed`
 
-- A report moves to `under_review` only when an admin clicks **Review**.
-- A `delayed` report stays delayed until an admin reviews it again.
+- A report moves to `under_review` only when an admin clicks **Review**. Opening a report changes nothing.
+- A `delayed` report stays delayed until an admin decides again (accept, reject, or keep delayed with a new reason).
+- `rejected` and `completed` are final.
 - After an engineer marks the repair **Completed**, an admin confirms it, and only then does the report become `completed`.
 
-The engineer's **repair status** (Pending, Working, Completed) is a separate field from the report status.
+The engineer's **repair status** (Pending, Working, Completed) is a separate field, changed only by the assigned engineer, and belongs to the current **repair attempt** (attempt 1, 2, …). A new attempt starts on assignment, on reassignment and when the engineer reopens a completed repair after admin feedback.
 
 ## Note on severity estimation
 
-The first version estimates severity from detection information such as bounding-box size, number of detections and confidence. **This is a rough estimate, not a validated engineering measurement.** Administrators can review and correct it.
+Severity is estimated from the detections: the sum of *box area share × confidence × class weight* (pothole 1.0, alligator crack 0.8, longitudinal/transverse crack 0.5), mapped to Low / Medium / High. **This is a rough estimate, not a validated engineering measurement.** Administrators can correct it; both values are kept.
 
 ## Repository structure
 
@@ -134,15 +156,13 @@ road-damage-fyp/
 │   │   ├── prisma/    # schema.prisma + migrations/
 │   │   ├── storage/uploads/  # Runtime uploads (not tracked in Git)
 │   │   └── tests/     # node:test suite
-│   └── ai/            # Python + FastAPI AI inference service (not started yet)
-│       ├── app/
+│   └── ai/            # Python + FastAPI AI inference service (Python 3.12, uv)
+│       ├── app/       # FastAPI app: model loading, /health, /v1/detect
 │       ├── weights/   # Location of best.pt (not tracked in Git)
-│       └── tests/
+│       └── tests/     # pytest suite
 ├── datasets/          # Dataset notes (data itself is not tracked in Git)
 └── docs/              # Project documentation
 ```
-
-`backend/ai/requirements.txt` will be added when the AI service is set up.
 
 ## Model weights
 
@@ -153,10 +173,9 @@ The trained `best.pt` file is **not** in this repository. Its intended location 
 Some implementation details are still open, including:
 
 - SMS provider (required before production use)
-- How the main backend calls the AI service
-- How locations are stored in PostgreSQL, and database hosting
-- Severity, workload and duplicate-detection rules
-- Frontend testing tool and deployment target
+- Notification channel for admins and engineers
+- Priority and duplicate-detection rules
+- Database hosting, deployment target, frontend testing tool, lint tools
 
 The full list is in [`CLAUDE.md`](CLAUDE.md) (§14).
 
@@ -165,6 +184,17 @@ The full list is in [`CLAUDE.md`](CLAUDE.md) (§14).
 ### Prerequisites
 - **Node.js 24** and npm
 - **PostgreSQL 18** with a database and a dedicated user (this project uses `road_damage_db` and `road_damage_user`). The user does not need permission to create databases.
+- **Python 3.12** managed with **uv** (for the AI service), and the trained `best.pt` file in `backend/ai/weights/`.
+
+### 0. AI service (`backend/ai`)
+```bash
+cd backend/ai
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python -r requirements-dev.txt   # CPU-only PyTorch
+cp .env.example .env          # set AI_SHARED_SECRET (same value as AI_SERVICE_SECRET in backend/api/.env)
+.venv/bin/uvicorn --factory app.main:create_app --host 127.0.0.1 --port 8000
+```
+The service refuses to start if `best.pt` is missing. Settings: `AI_SHARED_SECRET` (required), `AI_MODEL_PATH`, `AI_CONFIDENCE_THRESHOLD` (0.25), `AI_IOU_THRESHOLD` (0.7), `AI_IMAGE_SIZE` (640), `AI_DEVICE` (cpu).
 
 ### 1. Backend (`backend/api`)
 ```bash
@@ -179,9 +209,14 @@ npm run dev                 # API on http://localhost:3000
 In `backend/api/.env` set at least:
 - `DATABASE_URL` — replace `YOUR_PASSWORD` with your database user's password (URL-encode special characters).
 - `AUTH_SECRET` — a long random value, for example the output of `openssl rand -base64 48`.
-- `SMS_PROVIDER=mock` — development only; verification codes appear in the backend console.
+- `SMS_PROVIDER=mock` — development only; verification codes and citizen notifications appear in the backend console.
+- `AI_SERVICE_URL=http://127.0.0.1:8000` and `AI_SERVICE_SECRET` — the same secret as `AI_SHARED_SECRET` in `backend/ai/.env`.
 
-Never commit `.env`. See `backend/api/.env.example` for all options (CORS origins, default phone country, cookie SameSite).
+Optional: `AI_REQUEST_TIMEOUT_MS` (30000), `UPLOAD_DIR` (`storage/uploads`), `EXIF_LOCATION_TOLERANCE_KM` (2), `GPS_ACCURACY_THRESHOLD_METERS` (100), `CORS_ORIGIN`, `PHONE_DEFAULT_COUNTRY`, `COOKIE_SAMESITE`. Never commit `.env`; see `backend/api/.env.example`.
+
+Account tools (operators with database access):
+- `npm run admin:create` — first admin; `npm run admin:create -- --additional` for more admins.
+- `npm run account:reset-password` — reset the password of any existing account (asks for the mobile number, shows the account, asks for the new password twice, hidden). It does not verify or activate accounts.
 
 ### 2. Frontend (`frontend`)
 ```bash
@@ -190,15 +225,29 @@ npm install
 npm run dev                 # http://localhost:5173 (proxies /api to the backend)
 ```
 
-Open http://localhost:5173, register as a citizen, read the 6-digit code from the backend console, verify, and log in. Log in with the admin account to manage engineers.
+Open http://localhost:5173, register as a citizen, read the 6-digit code from the backend console, verify, log in and report damage. Log in with the admin account to review reports and create engineers; engineers log in with their temporary password, change it, and see their assigned jobs.
+
+Live camera and GPS work only on `http://localhost` or HTTPS. Desktop browsers usually locate by Wi-Fi, which can be hundreds of metres off; phones with GPS outdoors are much more accurate.
 
 ### Checks
 ```bash
 cd backend/api && npm run typecheck && npm test && npm run build
-cd frontend && npm run build
+cd backend/ai && .venv/bin/python -m pytest
+cd frontend && npm run build          # includes the TypeScript check
 ```
-Backend database tests use a separate `app_test` schema in the same database and never touch your real tables.
+Backend database tests use a separate `app_test` schema in the same database and never touch your real tables. There are no frontend unit tests yet (tool not chosen).
 
 ### Health endpoints
 - http://localhost:3000/api/health — API is running
 - http://localhost:3000/api/health/db — PostgreSQL is reachable
+
+## Known limitations
+
+- **SMS:** only the development "mock" sender exists; messages are printed to the backend console. Production refuses to start until a real provider is added. If the server stops between saving a decision and sending its SMS, that SMS is lost (there is no outbox).
+- **Notifications for admins and engineers:** none yet; engineers see new jobs on their dashboard.
+- **AI model:** only the `pothole` class has been checked on a real photo; the three crack classes have not been tested yet. Severity is a heuristic estimate.
+- **Location accuracy:** depends on the device; laptops often have no GPS. Poor accuracy is flagged for review, never rejected.
+- **Sessions:** an access token issued before logout, deactivation or a password reset stays valid for up to 15 minutes.
+- **Rate limits** are kept in memory (they reset on restart and assume a single server process).
+- **Frontend bundle** is about 530 kB (160 kB compressed); Vite warns above 500 kB. Loading the admin and engineer pages on demand would reduce it.
+- **Not implemented yet:** chat, analytics/charts, priority, duplicate detection, HEIC photos, forgot-password for users in the app.

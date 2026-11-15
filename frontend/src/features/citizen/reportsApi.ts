@@ -1,6 +1,6 @@
 import { api } from "../../lib/api";
 import type { Paginated } from "../../lib/types";
-import type { Report, ReportDraft, ReportListItem, ReportStatus, ReportSummary } from "./types";
+import type { Report, ReportDraft, ReportListItem, ReportStatus, ReportSummary } from "../../lib/reportTypes";
 
 export interface ReportQuery {
   page: number;

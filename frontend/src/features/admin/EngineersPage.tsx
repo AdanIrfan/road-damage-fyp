@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router";
+import { Pagination } from "../../components/Pagination";
 import { Alert, Badge, Button, Card, Spinner } from "../../components/ui";
 import { errorMessage } from "../../lib/api";
-import type { Paginated, User } from "../../lib/types";
+import type { EngineerAccount, Paginated, User } from "../../lib/types";
 import { formatDate, statusLabel, statusTone } from "../../utils/format";
 import { CreateEngineerForm } from "./CreateEngineerForm";
 import { engineersApi, type EngineerQuery } from "./engineersApi";
@@ -12,7 +13,7 @@ const PAGE_SIZE = 10;
 export function EngineersPage() {
   const [query, setQuery] = useState<EngineerQuery>({ page: 1, pageSize: PAGE_SIZE });
   const [searchInput, setSearchInput] = useState("");
-  const [result, setResult] = useState<Paginated<User>>();
+  const [result, setResult] = useState<Paginated<EngineerAccount>>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
   const [showCreate, setShowCreate] = useState(false);
@@ -57,7 +58,6 @@ export function EngineersPage() {
     }
   }
 
-  const totalPages = result === undefined ? 1 : Math.max(1, Math.ceil(result.total / result.pageSize));
 
   return (
     <div className="space-y-6">
@@ -134,6 +134,7 @@ export function EngineersPage() {
                   <th className="py-2 pr-4">Name</th>
                   <th className="py-2 pr-4">Mobile number</th>
                   <th className="py-2 pr-4">Status</th>
+                  <th className="py-2 pr-4">Open jobs</th>
                   <th className="hidden py-2 pr-4 md:table-cell">Created</th>
                   <th className="py-2 text-right">Actions</th>
                 </tr>
@@ -150,6 +151,12 @@ export function EngineersPage() {
                     <td className="py-3 pr-4 text-slate-600">{engineer.mobileNumber}</td>
                     <td className="py-3 pr-4">
                       <Badge tone={statusTone[engineer.status]}>{statusLabel[engineer.status]}</Badge>
+                    </td>
+                    <td className="py-3 pr-4 text-slate-700">
+                      {engineer.workload.openJobs}
+                      {engineer.workload.awaitingConfirmation > 0 && (
+                        <span className="block text-xs text-slate-500">{engineer.workload.awaitingConfirmation} awaiting confirmation</span>
+                      )}
                     </td>
                     <td className="hidden py-3 pr-4 text-slate-500 md:table-cell">{formatDate(engineer.createdAt)}</td>
                     <td className="py-3 text-right">
@@ -169,20 +176,15 @@ export function EngineersPage() {
           )}
         </div>
 
-        {result !== undefined && result.total > 0 && (
-          <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4 text-sm text-slate-600">
-            <span>
-              {result.total} engineer{result.total === 1 ? "" : "s"} · page {result.page} of {totalPages}
-            </span>
-            <div className="flex gap-2">
-              <Button variant="secondary" className="px-3 py-1.5" disabled={query.page <= 1 || loading} onClick={() => setQuery((c) => ({ ...c, page: c.page - 1 }))}>
-                Previous
-              </Button>
-              <Button variant="secondary" className="px-3 py-1.5" disabled={query.page >= totalPages || loading} onClick={() => setQuery((c) => ({ ...c, page: c.page + 1 }))}>
-                Next
-              </Button>
-            </div>
-          </div>
+        {result !== undefined && (
+          <Pagination
+            page={result.page}
+            pageSize={result.pageSize}
+            total={result.total}
+            loading={loading}
+            noun="engineer"
+            onPage={(page) => setQuery((c) => ({ ...c, page }))}
+          />
         )}
       </Card>
     </div>

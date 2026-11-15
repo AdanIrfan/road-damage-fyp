@@ -387,7 +387,8 @@ describe("citizen reports", { skip: skipWithoutDatabase }, () => {
       const admin = await adminClient();
       assert.equal((await admin.getRaw(url)).status, 200);
       const engineer = await engineerClient(admin);
-      assert.equal((await engineer.getRaw(url)).status, 403);
+      // Stage 4: engineers may see photos of jobs assigned to them; any other report is hidden (404).
+      assert.equal((await engineer.getRaw(url)).status, 404);
 
       const wrongImage = url.replace(/[0-9a-f-]{36}$/, "00000000-0000-4000-8000-000000000000");
       assert.equal((await citizen.getRaw(wrongImage)).status, 404);

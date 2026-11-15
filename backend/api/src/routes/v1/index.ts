@@ -1,12 +1,14 @@
 import cookieParser from "cookie-parser";
 import { Router } from "express";
+import { createAdminReportsController } from "../../controllers/adminReports.controller.js";
 import { createAuthController } from "../../controllers/auth.controller.js";
+import { createEngineerJobsController } from "../../controllers/engineerJobs.controller.js";
 import { createEngineersController } from "../../controllers/engineers.controller.js";
 import { createProfileController } from "../../controllers/profile.controller.js";
 import { createReportsController } from "../../controllers/reports.controller.js";
 import { createAuthenticate, requirePasswordChanged, requireRole } from "../../middleware/auth.js";
 import { createCsrf } from "../../middleware/csrf.js";
-import { createAuthRateLimiters, createReportRateLimiter } from "../../middleware/rateLimit.js";
+import { createAuthRateLimiters, createRepairPhotoRateLimiter, createReportRateLimiter } from "../../middleware/rateLimit.js";
 import { uploadReportImage } from "../../middleware/upload.js";
 import type { Services } from "../../services/index.js";
 import type { CookieSettings } from "../../utils/authCookies.js";
@@ -14,7 +16,7 @@ import type { CookieSettings } from "../../utils/authCookies.js";
 export interface V1Dependencies {
   services: Services;
   cookies: CookieSettings;
-  /** Per-IP rate limits on login/register/OTP and per-citizen limits on reports. Disabled in tests. */
+  /** Per-IP limits on login/register/OTP, per-user limits on report submissions and repair photo uploads. Disabled in tests. */
   rateLimiting: boolean;
 }
 
@@ -25,7 +27,8 @@ export interface V1Dependencies {
  *                                 /auth/login, /auth/refresh, /auth/logout
  * Logged in (any role):           /auth/me, /profile, /profile/password
  * Citizens:                       /reports (submit, list, summary, detail), /reports/:id/images/:imageId
- * Admin only:                     /admin/engineers...  (+ any report image)
+ * Engineers:                      /engineer/summary, /engineer/jobs... (own jobs only), report images + repair photos of own jobs
+ * Admin only:                     /admin/engineers..., /admin/dashboard, /admin/reports... (+ any report image)
  *
  * Without dependencies (some tests) no application routes are mounted.
  */
@@ -44,7 +47,10 @@ export function createV1Router(deps?: V1Dependencies): Router {
   const profile = createProfileController({ auth: services.auth, users: services.users, cookies });
   const engineers = createEngineersController({ engineers: services.engineers, auth: services.auth });
   const reports = createReportsController({ reports: services.reports });
+  const adminReports = createAdminReportsController({ reports: services.adminReports, assignments: services.assignments });
   const reportLimit = createReportRateLimiter(deps.rateLimiting);
+  const engineerJobs = createEngineerJobsController({ jobs: services.engineerJobs });
+  const repairPhotoLimit = createRepairPhotoRateLimiter(deps.rateLimiting);
 
   router.use(cookieParser());
   // Every state-changing /api/v1 request needs a valid CSRF token (including login).
@@ -77,6 +83,16 @@ export function createV1Router(deps?: V1Dependencies): Router {
   adminRouter.get("/engineers/:id", engineers.get);
   adminRouter.patch("/engineers/:id", engineers.update);
   adminRouter.patch("/engineers/:id/status", engineers.setStatus);
+  adminRouter.get("/dashboard", adminReports.dashboard);
+  adminRouter.get("/reports", adminReports.list);
+  adminRouter.get("/reports/:id", adminReports.get);
+  adminRouter.post("/reports/:id/review", adminReports.review);
+  adminRouter.post("/reports/:id/decision", adminReports.decide);
+  adminRouter.patch("/reports/:id/severity", adminReports.setSeverity);
+  adminRouter.post("/reports/:id/feedback", adminReports.feedback);
+  adminRouter.post("/reports/:id/confirm-completion", adminReports.confirmCompletion);
+  adminRouter.get("/reports/:id/engineer-suggestions", adminReports.suggestions);
+  adminRouter.post("/reports/:id/assignment", adminReports.assign);
   router.use("/admin", adminRouter);
 
   // Order matters for uploads: authentication, role, CSRF (above) and the rate limit run BEFORE
@@ -87,8 +103,20 @@ export function createV1Router(deps?: V1Dependencies): Router {
   reportsRouter.get("/", requireRole("CITIZEN"), reports.list);
   reportsRouter.get("/summary", requireRole("CITIZEN"), reports.summary);
   reportsRouter.get("/:id", requireRole("CITIZEN"), reports.get);
-  reportsRouter.get("/:id/images/:imageId", requireRole("CITIZEN", "ADMIN"), reports.image);
+  reportsRouter.get("/:id/images/:imageId", requireRole("CITIZEN", "ADMIN", "ENGINEER"), reports.image);
+  reportsRouter.get("/:id/repair-photos/:photoId", requireRole("ADMIN", "ENGINEER"), engineerJobs.repairPhoto);
   router.use("/reports", reportsRouter);
+
+  // Engineers: only their own jobs (enforced in the service). Uploads are parsed after auth/CSRF/limit.
+  const engineerRouter = Router();
+  engineerRouter.use(authenticate, requireRole("ENGINEER"), requirePasswordChanged);
+  engineerRouter.get("/summary", engineerJobs.summary);
+  engineerRouter.get("/jobs", engineerJobs.list);
+  engineerRouter.get("/jobs/:reportId", engineerJobs.get);
+  engineerRouter.patch("/jobs/:reportId/repair-status", engineerJobs.setRepairStatus);
+  engineerRouter.post("/jobs/:reportId/notes", engineerJobs.addNote);
+  engineerRouter.post("/jobs/:reportId/photos", repairPhotoLimit, uploadReportImage, engineerJobs.addPhoto);
+  router.use("/engineer", engineerRouter);
 
   return router;
 }

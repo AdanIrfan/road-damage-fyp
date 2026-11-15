@@ -20,3 +20,12 @@ export interface Paginated<T> {
   pageSize: number;
   total: number;
 }
+
+/** Admin view of an engineer account (Stage 4 adds workload counts). */
+export interface EngineerWorkload {
+  openJobs: number;
+  awaitingConfirmation: number;
+  completedJobs: number;
+}
+
+export type EngineerAccount = User & { workload: EngineerWorkload };

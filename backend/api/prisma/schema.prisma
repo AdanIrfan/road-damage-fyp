@@ -5,7 +5,8 @@
 //
 // Phase 2 (authentication and user management): users, OTP codes, refresh tokens.
 // Phase 3 (citizen reporting): reports, report images, AI detections, report status history.
-// Models for later phases (assignments, messages, notifications, ...) are NOT added yet.
+// Stage 4 (admin & engineer workflows): assignments, repair attempts, repair updates, repair photos.
+// Models for later phases (messages, notifications, ...) are NOT added yet.
 
 generator client {
   provider     = "prisma-client"
@@ -59,6 +60,13 @@ model User {
   reports       Report[]              @relation("ReportCitizen")
   severityEdits Report[]              @relation("ReportAdminSeverity")
   statusChanges ReportStatusHistory[]
+
+  assignedReports     Report[]           @relation("ReportAssignedEngineer")
+  assignmentsReceived ReportAssignment[] @relation("AssignmentEngineer")
+  assignmentsReplaced ReportAssignment[] @relation("AssignmentPreviousEngineer")
+  assignmentsMade     ReportAssignment[] @relation("AssignmentAssignedBy")
+  repairUpdates       RepairUpdate[]
+  repairPhotos        RepairPhoto[]
 
   @@index([role, status])
   @@index([createdAt])
@@ -151,51 +159,65 @@ enum SeverityLevel {
 }
 
 model Report {
-  id                  String                     @id @default(uuid()) @db.Uuid
-  citizenId           String                     @map("citizen_id") @db.Uuid
-  status              ReportStatus               @default(SUBMITTED)
-  captureMethod       CaptureMethod              @map("capture_method")
-  description         String?                    @db.VarChar(1000)
+  id                    String                     @id @default(uuid()) @db.Uuid
+  citizenId             String                     @map("citizen_id") @db.Uuid
+  status                ReportStatus               @default(SUBMITTED)
+  captureMethod         CaptureMethod              @map("capture_method")
+  description           String?                    @db.VarChar(1000)
   /// Location chosen on the map (gallery) or captured by browser GPS (live camera). WGS84 degrees.
-  latitude            Float
-  longitude           Float
+  latitude              Float
+  longitude             Float
   /// Browser-reported GPS accuracy in metres (live camera only).
-  gpsAccuracyM        Float?                     @map("gps_accuracy_m")
-  locationStatus      LocationVerificationStatus @map("location_status")
+  gpsAccuracyM          Float?                     @map("gps_accuracy_m")
+  locationStatus        LocationVerificationStatus @map("location_status")
   /// True when an admin should check the location (mismatch, no metadata, poor GPS accuracy).
-  locationNeedsReview Boolean                    @map("location_needs_review")
+  locationNeedsReview   Boolean                    @map("location_needs_review")
   /// GPS position read from the original photo's EXIF (gallery uploads). Never sent to citizens.
-  exifLatitude        Float?                     @map("exif_latitude")
-  exifLongitude       Float?                     @map("exif_longitude")
+  exifLatitude          Float?                     @map("exif_latitude")
+  exifLongitude         Float?                     @map("exif_longitude")
   /// Haversine distance between the EXIF position and the selected location, in metres.
-  exifDistanceM       Float?                     @map("exif_distance_m")
-  aiStatus            AiAnalysisStatus           @map("ai_status")
+  exifDistanceM         Float?                     @map("exif_distance_m")
+  aiStatus              AiAnalysisStatus           @map("ai_status")
   /// Why the analysis failed (unavailable | timeout | rejected | invalid_response).
-  aiErrorCode         String?                    @map("ai_error_code") @db.VarChar(40)
+  aiErrorCode           String?                    @map("ai_error_code") @db.VarChar(40)
   /// Model name reported by the AI service.
-  aiModel             String?                    @map("ai_model") @db.VarChar(100)
-  aiAnalyzedAt        DateTime?                  @map("ai_analyzed_at") @db.Timestamptz(3)
+  aiModel               String?                    @map("ai_model") @db.VarChar(100)
+  aiAnalyzedAt          DateTime?                  @map("ai_analyzed_at") @db.Timestamptz(3)
   /// Estimated severity computed by the main backend from the AI detections. Null if no damage was detected or the analysis failed.
-  aiSeverity          SeverityLevel?             @map("ai_severity")
-  aiSeverityScore     Float?                     @map("ai_severity_score")
+  aiSeverity            SeverityLevel?             @map("ai_severity")
+  aiSeverityScore       Float?                     @map("ai_severity_score")
   /// Severity set by an admin (admin review phase). The AI value is always kept as well.
-  adminSeverity       SeverityLevel?             @map("admin_severity")
-  adminSeverityById   String?                    @map("admin_severity_by_id") @db.Uuid
-  adminSeverityAt     DateTime?                  @map("admin_severity_at") @db.Timestamptz(3)
-  createdAt           DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt           DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  adminSeverity         SeverityLevel?             @map("admin_severity")
+  adminSeverityById     String?                    @map("admin_severity_by_id") @db.Uuid
+  adminSeverityAt       DateTime?                  @map("admin_severity_at") @db.Timestamptz(3)
+  /// Engineer currently responsible for the repair (Stage 4). NULL = unassigned.
+  assignedEngineerId    String?                    @map("assigned_engineer_id") @db.Uuid
+  assignedAt            DateTime?                  @map("assigned_at") @db.Timestamptz(3)
+  /// Repair status of the CURRENT attempt. Changed only by the assigned engineer (PENDING is the initial state of an attempt). NULL until assigned.
+  repairStatus          RepairStatus?              @map("repair_status")
+  repairStatusUpdatedAt DateTime?                  @map("repair_status_updated_at") @db.Timestamptz(3)
+  /// Current repair attempt (1, 2, ...). 1 on first assignment; +1 on reassignment and on reopen. Never decreases. NULL until assigned.
+  repairAttempt         Int?                       @map("repair_attempt")
+  createdAt             DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  citizen         User                  @relation("ReportCitizen", fields: [citizenId], references: [id], onDelete: Restrict)
-  adminSeverityBy User?                 @relation("ReportAdminSeverity", fields: [adminSeverityById], references: [id], onDelete: SetNull)
-  images          ReportImage[]
-  detections      AiDetection[]
-  statusHistory   ReportStatusHistory[]
+  citizen          User                  @relation("ReportCitizen", fields: [citizenId], references: [id], onDelete: Restrict)
+  adminSeverityBy  User?                 @relation("ReportAdminSeverity", fields: [adminSeverityById], references: [id], onDelete: SetNull)
+  assignedEngineer User?                 @relation("ReportAssignedEngineer", fields: [assignedEngineerId], references: [id], onDelete: SetNull)
+  images           ReportImage[]
+  detections       AiDetection[]
+  statusHistory    ReportStatusHistory[]
+  assignments      ReportAssignment[]
+  repairUpdates    RepairUpdate[]
+  repairPhotos     RepairPhoto[]
 
   @@index([citizenId, createdAt])
   @@index([status, createdAt])
   @@index([aiSeverity])
   @@index([createdAt])
   @@index([latitude, longitude])
+  @@index([assignedEngineerId, repairStatus])
+  @@index([status, repairStatus])
   @@map("reports")
 }
 
@@ -263,4 +285,89 @@ model ReportStatusHistory {
 
   @@index([reportId, createdAt])
   @@map("report_status_history")
+}
+
+// ---------------------------------------------------------------------------
+// Stage 4: assignments and repair work (organised in numbered repair attempts)
+// ---------------------------------------------------------------------------
+
+/// Repair status of one attempt. Exactly these three values (CLAUDE.md §3).
+enum RepairStatus {
+  PENDING
+  WORKING
+  COMPLETED
+}
+
+enum RepairUpdateKind {
+  /// The engineer changed the repair status (from/to are set).
+  STATUS_CHANGE
+  /// A progress note by the engineer.
+  NOTE
+  /// "Needs more work" note by an admin on a Completed attempt.
+  ADMIN_FEEDBACK
+}
+
+/// Audit trail of (re)assignments. Each one starts a new repair attempt.
+model ReportAssignment {
+  id                 String   @id @default(uuid()) @db.Uuid
+  reportId           String   @map("report_id") @db.Uuid
+  engineerId         String   @map("engineer_id") @db.Uuid
+  previousEngineerId String?  @map("previous_engineer_id") @db.Uuid
+  assignedById       String   @map("assigned_by_id") @db.Uuid
+  reason             String?  @db.VarChar(500)
+  /// The repair attempt this assignment started.
+  attempt            Int
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  report           Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  engineer         User   @relation("AssignmentEngineer", fields: [engineerId], references: [id], onDelete: Restrict)
+  previousEngineer User?  @relation("AssignmentPreviousEngineer", fields: [previousEngineerId], references: [id], onDelete: SetNull)
+  assignedBy       User   @relation("AssignmentAssignedBy", fields: [assignedById], references: [id], onDelete: Restrict)
+
+  @@index([reportId, createdAt])
+  @@index([engineerId])
+  @@map("report_assignments")
+}
+
+/// Engineer progress (status changes, notes) and admin feedback, per attempt. Never deleted.
+model RepairUpdate {
+  id         String           @id @default(uuid()) @db.Uuid
+  reportId   String           @map("report_id") @db.Uuid
+  authorId   String           @map("author_id") @db.Uuid
+  kind       RepairUpdateKind
+  attempt    Int
+  fromStatus RepairStatus?    @map("from_status")
+  toStatus   RepairStatus?    @map("to_status")
+  note       String?          @db.VarChar(1000)
+  createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  author User   @relation(fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([reportId, createdAt])
+  @@map("repair_updates")
+}
+
+/// Repair evidence photo, tagged with the attempt it belongs to. Never deleted or re-tagged.
+model RepairPhoto {
+  id           String   @id @default(uuid()) @db.Uuid
+  reportId     String   @map("report_id") @db.Uuid
+  uploadedById String   @map("uploaded_by_id") @db.Uuid
+  attempt      Int
+  /// The upload exactly as received (keeps EXIF). Private: never served.
+  originalKey  String   @unique @map("original_key") @db.VarChar(200)
+  /// Re-encoded JPEG without metadata. The only copy that is served.
+  displayKey   String   @unique @map("display_key") @db.VarChar(200)
+  mimeType     String   @map("mime_type") @db.VarChar(50)
+  sizeBytes    Int      @map("size_bytes")
+  width        Int
+  height       Int
+  sha256       String   @db.VarChar(64)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  report     Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  uploadedBy User   @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@index([reportId, attempt])
+  @@map("repair_photos")
 }

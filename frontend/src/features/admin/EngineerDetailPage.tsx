@@ -2,13 +2,17 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 import { Alert, Badge, Button, Card, Spinner, TextField } from "../../components/ui";
 import { ApiError, errorMessage, type FieldErrors } from "../../lib/api";
-import type { User } from "../../lib/types";
+import type { AdminReportListItem } from "../../lib/reportTypes";
+import type { EngineerAccount, User } from "../../lib/types";
 import { firstError, formatDate, statusLabel, statusTone } from "../../utils/format";
+import { adminReportsApi } from "./adminReportsApi";
+import { AdminReportTable } from "./AdminReportTable";
 import { engineersApi } from "./engineersApi";
 
 export function EngineerDetailPage() {
   const { id = "" } = useParams();
-  const [engineer, setEngineer] = useState<User>();
+  const [engineer, setEngineer] = useState<EngineerAccount>();
+  const [jobs, setJobs] = useState<{ open: AdminReportListItem[]; completed: AdminReportListItem[] }>();
   const [loadError, setLoadError] = useState<string>();
   const [form, setForm] = useState({ fullName: "", mobileNumber: "" });
   const [saving, setSaving] = useState(false);
@@ -29,13 +33,25 @@ export function EngineerDetailPage() {
       .catch((err: unknown) => {
         if (!cancelled) setLoadError(errorMessage(err));
       });
+    // Jobs come from the admin report list, filtered by this engineer.
+    Promise.all([
+      adminReportsApi.list({ engineerId: id, status: "ACCEPTED", pageSize: "50" }),
+      adminReportsApi.list({ engineerId: id, status: "COMPLETED", pageSize: "50" }),
+    ])
+      .then(([open, completed]) => {
+        if (!cancelled) setJobs({ open: open.items, completed: completed.items });
+      })
+      .catch(() => {
+        if (!cancelled) setJobs({ open: [], completed: [] });
+      });
     return () => {
       cancelled = true;
     };
   }, [id]);
 
   function apply(updated: User, message: string) {
-    setEngineer(updated);
+    // Updates return the account without workload figures; keep the ones already loaded.
+    setEngineer((previous) => (previous === undefined ? previous : { ...previous, ...updated }));
     setForm({ fullName: updated.fullName, mobileNumber: updated.mobileNumber });
     setNotice(message);
   }
@@ -133,6 +149,40 @@ export function EngineerDetailPage() {
           </Button>
         </form>
       </Card>
+
+      <div className="grid grid-cols-3 gap-3">
+        <Stat label="Open jobs" value={engineer.workload.openJobs} />
+        <Stat label="Awaiting confirmation" value={engineer.workload.awaitingConfirmation} />
+        <Stat label="Completed" value={engineer.workload.completedJobs} />
+      </div>
+
+      <Card title="Assigned jobs" description="Accepted reports currently assigned to this engineer.">
+        {jobs === undefined ? (
+          <Spinner />
+        ) : jobs.open.length === 0 ? (
+          <p className="text-sm text-slate-500">No open jobs.</p>
+        ) : (
+          <AdminReportTable items={jobs.open} />
+        )}
+      </Card>
+      <Card title="Completed jobs" description="Reports confirmed as completed while assigned to this engineer.">
+        {jobs === undefined ? (
+          <Spinner />
+        ) : jobs.completed.length === 0 ? (
+          <p className="text-sm text-slate-500">No completed jobs yet.</p>
+        ) : (
+          <AdminReportTable items={jobs.completed} />
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="mt-1 text-2xl font-semibold text-slate-900">{value}</div>
     </div>
   );
 }

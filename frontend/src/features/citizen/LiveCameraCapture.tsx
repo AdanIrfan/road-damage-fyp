@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Spinner } from "../../components/ui";
-import { LocationMap } from "./LocationMap";
+import { LocationMap } from "../../components/reports/LocationMap";
 import { GPS_ACCURACY_WARNING_METERS } from "./reportsApi";
-import type { Coordinates } from "./types";
+import type { Coordinates } from "../../lib/reportTypes";
 
 export interface LiveCapture {
   photo: Blob;

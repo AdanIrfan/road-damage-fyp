@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Circle, MapContainer, Marker, TileLayer, useMap, useMapEvents } from "react-leaflet";
-import { Button } from "../../components/ui";
+import { Circle, CircleMarker, MapContainer, Marker, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
+import { Button } from "../ui";
 import { OSM_ATTRIBUTION, OSM_MAX_ZOOM, OSM_REFERRER_POLICY, OSM_TILE_URL } from "../../lib/map";
-import type { Coordinates } from "./types";
+import type { Coordinates } from "../../lib/reportTypes";
 
 const WORLD_VIEW = { center: [20, 0] as [number, number], zoom: 2 };
 const PICKED_ZOOM = 17;
@@ -13,11 +13,13 @@ interface LocationMapProps {
   onChange?: (value: Coordinates) => void;
   /** Draws the GPS accuracy circle (live camera). */
   accuracyMeters?: number | null;
+  /** A second point to compare with (admins: the photo's EXIF position). */
+  comparison?: (Coordinates & { label: string }) | null;
   className?: string;
 }
 
 /** OpenStreetMap map showing one location; optionally lets the user pick it by clicking. */
-export function LocationMap({ value, onChange, accuracyMeters, className = "h-72" }: LocationMapProps) {
+export function LocationMap({ value, onChange, accuracyMeters, comparison, className = "h-72" }: LocationMapProps) {
   const [recenterTo, setRecenterTo] = useState<Coordinates | null>(null);
   const [locating, setLocating] = useState(false);
   const [locateError, setLocateError] = useState<string>();
@@ -67,6 +69,15 @@ export function LocationMap({ value, onChange, accuracyMeters, className = "h-72
           {value !== null && <Marker position={[value.latitude, value.longitude]} />}
           {value !== null && accuracyMeters != null && (
             <Circle center={[value.latitude, value.longitude]} radius={accuracyMeters} pathOptions={{ color: "#2563eb", weight: 1, fillOpacity: 0.1 }} />
+          )}
+          {comparison != null && (
+            <CircleMarker
+              center={[comparison.latitude, comparison.longitude]}
+              radius={8}
+              pathOptions={{ color: "#dc2626", weight: 2, fillColor: "#f87171", fillOpacity: 0.7 }}
+            >
+              <Tooltip>{comparison.label}</Tooltip>
+            </CircleMarker>
           )}
           {editable && <ClickToPick onPick={onChange} />}
           <Recenter to={recenterTo} />
