@@ -18,9 +18,11 @@ const NAV_ITEMS: readonly NavItem[] = [
   { to: "/reports", label: "My reports", roles: ["CITIZEN"] },
   { to: "/admin", label: "Dashboard", roles: ["ADMIN"], end: true },
   { to: "/admin/reports", label: "Reports", roles: ["ADMIN"] },
+  { to: "/admin/analytics", label: "Analytics", roles: ["ADMIN"] },
   { to: "/admin/engineers", label: "Engineers", roles: ["ADMIN"] },
   { to: "/engineer", label: "My jobs", roles: ["ENGINEER"], end: true },
   { to: "/engineer/history", label: "History", roles: ["ENGINEER"] },
+  { to: "/chat", label: "Messages", roles: ["ADMIN", "ENGINEER"] },
   { to: "/profile", label: "My profile", roles: ["CITIZEN", "ADMIN", "ENGINEER"] },
 ];
 

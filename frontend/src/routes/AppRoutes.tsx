@@ -1,4 +1,5 @@
 import { Route, Routes } from "react-router";
+import { AdminAnalyticsPage } from "../features/admin/AdminAnalyticsPage";
 import { AdminDashboardPage } from "../features/admin/AdminDashboardPage";
 import { AdminReportDetailPage } from "../features/admin/AdminReportDetailPage";
 import { AdminReportsPage } from "../features/admin/AdminReportsPage";
@@ -8,6 +9,7 @@ import { ChangePasswordPage } from "../features/auth/ChangePasswordPage";
 import { LoginPage } from "../features/auth/LoginPage";
 import { RegisterPage } from "../features/auth/RegisterPage";
 import { VerifyOtpPage } from "../features/auth/VerifyOtpPage";
+import { ChatPage } from "../features/chat/ChatPage";
 import { CitizenDashboardPage } from "../features/citizen/CitizenDashboardPage";
 import { NewReportPage } from "../features/citizen/NewReportPage";
 import { ReportDetailPage } from "../features/citizen/ReportDetailPage";
@@ -40,6 +42,7 @@ export function AppRoutes() {
           </Route>
           <Route path="/admin" element={<RequireRole roles={["ADMIN"]} />}>
             <Route index element={<AdminDashboardPage />} />
+            <Route path="analytics" element={<AdminAnalyticsPage />} />
             <Route path="reports" element={<AdminReportsPage />} />
             <Route path="reports/:id" element={<AdminReportDetailPage />} />
             <Route path="engineers" element={<EngineersPage />} />
@@ -49,6 +52,9 @@ export function AppRoutes() {
             <Route index element={<EngineerDashboardPage />} />
             <Route path="jobs/:id" element={<EngineerJobDetailPage />} />
             <Route path="history" element={<EngineerHistoryPage />} />
+          </Route>
+          <Route path="/chat" element={<RequireRole roles={["ADMIN", "ENGINEER"]} />}>
+            <Route index element={<ChatPage />} />
           </Route>
         </Route>
       </Route>

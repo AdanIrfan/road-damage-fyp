@@ -216,6 +216,7 @@ describe("admin report workflow (review, decisions, severity)", { skip: skipWith
       assert.equal(severity["admin"], "HIGH");
       assert.equal(severity["effective"], "HIGH");
       assert.equal((severity["adminSetBy"] as Json)["fullName"], "Admin 110");
+      assert.deepEqual(citizenSms(ctx, numbers.citizen), [], "no SMS for a severity correction");
       assert.equal((await admin.patch(`${base(id)}/severity`, { severity: "SEVERE" })).status, 400);
     });
 

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../../src/app.js";
 import type { PrismaClient } from "../../src/db/prisma.js";
+import { attachChatGateway, type ChatGateway } from "../../src/realtime/chatGateway.js";
 import { createServices, type Services } from "../../src/services/index.js";
 import type { SmsSender } from "../../src/services/sms/index.js";
 import { createLocalFileStorage } from "../../src/services/storage/fileStorage.js";
@@ -51,6 +52,8 @@ export interface AuthTestContext {
   sms: FakeSms;
   clock: TestClock;
   ai: FakeAiClient;
+  /** The chat WebSocket gateway attached to the test server. */
+  chatGateway: ChatGateway;
   /** Temporary upload folder, deleted by close(). */
   uploadDir: string;
   client: () => TestClient;
@@ -82,16 +85,30 @@ export async function startAuthTestApp(prisma: PrismaClient, options: { rateLimi
     },
     { exposeErrorStack: false, logRequests: false, corsOrigins: [ALLOWED_ORIGIN] },
   );
-  const server = await startTestServer(app);
+  let chatGateway: ChatGateway | undefined;
+  const server = await startTestServer(app, (http) => {
+    chatGateway = attachChatGateway(http, {
+      tokens: services.tokens,
+      users: services.users,
+      chat: services.chat,
+      allowedOrigins: [ALLOWED_ORIGIN],
+      heartbeat: false,
+      clock: clock.now,
+    });
+  });
+  if (chatGateway === undefined) throw new Error("chat gateway was not attached");
+  const gateway = chatGateway;
   return {
     server,
     services,
     sms,
     clock,
     ai,
+    chatGateway: gateway,
     uploadDir,
     client: () => new TestClient(server.baseUrl),
     close: async () => {
+      gateway.close();
       await server.close();
       await rm(uploadDir, { recursive: true, force: true });
     },

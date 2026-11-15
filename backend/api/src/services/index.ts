@@ -2,9 +2,11 @@ import type { CountryCode } from "libphonenumber-js/max";
 import type { PrismaClient } from "../db/prisma.js";
 import { deriveKey } from "../utils/crypto.js";
 import { createAdminReportService, type AdminReportService } from "./adminReport.service.js";
+import { createAnalyticsService, type AnalyticsService } from "./analytics.service.js";
 import type { AiClient } from "./ai/aiClient.js";
 import { createAssignmentService, type AssignmentService } from "./assignment.service.js";
 import { createAuthService, type AuthService } from "./auth.service.js";
+import { createChatService, type ChatService } from "./chat.service.js";
 import { systemClock, type Clock } from "./clock.js";
 import { createEngineerService, type EngineerService } from "./engineer.service.js";
 import { createEngineerJobService, type EngineerJobService } from "./engineerJob.service.js";
@@ -25,6 +27,8 @@ export interface Services {
   adminReports: AdminReportService;
   assignments: AssignmentService;
   engineerJobs: EngineerJobService;
+  chat: ChatService;
+  analytics: AnalyticsService;
   /** Key for signing CSRF tokens (derived from AUTH_SECRET). */
   csrfKey: Buffer;
 }
@@ -63,6 +67,8 @@ export function createServices(deps: ServiceDependencies): Services {
     adminReports,
     assignments: createAssignmentService({ prisma: deps.prisma, adminReports, clock }),
     engineerJobs: createEngineerJobService({ prisma: deps.prisma, storage: deps.storage, clock }),
+    chat: createChatService({ prisma: deps.prisma }),
+    analytics: createAnalyticsService({ prisma: deps.prisma, clock }),
     csrfKey: deriveKey(deps.authSecret, "csrf"),
   };
 }

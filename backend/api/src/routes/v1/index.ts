@@ -1,7 +1,9 @@
 import cookieParser from "cookie-parser";
 import { Router } from "express";
 import { createAdminReportsController } from "../../controllers/adminReports.controller.js";
+import { createAnalyticsController } from "../../controllers/analytics.controller.js";
 import { createAuthController } from "../../controllers/auth.controller.js";
+import { createChatController } from "../../controllers/chat.controller.js";
 import { createEngineerJobsController } from "../../controllers/engineerJobs.controller.js";
 import { createEngineersController } from "../../controllers/engineers.controller.js";
 import { createProfileController } from "../../controllers/profile.controller.js";
@@ -28,7 +30,9 @@ export interface V1Dependencies {
  * Logged in (any role):           /auth/me, /profile, /profile/password
  * Citizens:                       /reports (submit, list, summary, detail), /reports/:id/images/:imageId
  * Engineers:                      /engineer/summary, /engineer/jobs... (own jobs only), report images + repair photos of own jobs
- * Admin only:                     /admin/engineers..., /admin/dashboard, /admin/reports... (+ any report image)
+ * Admin only:                     /admin/engineers..., /admin/dashboard, /admin/analytics, /admin/reports... (+ any report image)
+ * Admins and engineers:           /chat/contacts, /chat/conversations... (history; sending is over the
+ *                                 WebSocket at /api/v1/chat/ws, see realtime/chatGateway.ts)
  *
  * Without dependencies (some tests) no application routes are mounted.
  */
@@ -51,6 +55,8 @@ export function createV1Router(deps?: V1Dependencies): Router {
   const reportLimit = createReportRateLimiter(deps.rateLimiting);
   const engineerJobs = createEngineerJobsController({ jobs: services.engineerJobs });
   const repairPhotoLimit = createRepairPhotoRateLimiter(deps.rateLimiting);
+  const chat = createChatController({ chat: services.chat });
+  const analytics = createAnalyticsController({ analytics: services.analytics });
 
   router.use(cookieParser());
   // Every state-changing /api/v1 request needs a valid CSRF token (including login).
@@ -84,6 +90,7 @@ export function createV1Router(deps?: V1Dependencies): Router {
   adminRouter.patch("/engineers/:id", engineers.update);
   adminRouter.patch("/engineers/:id/status", engineers.setStatus);
   adminRouter.get("/dashboard", adminReports.dashboard);
+  adminRouter.get("/analytics", analytics.get);
   adminRouter.get("/reports", adminReports.list);
   adminRouter.get("/reports/:id", adminReports.get);
   adminRouter.post("/reports/:id/review", adminReports.review);
@@ -117,6 +124,15 @@ export function createV1Router(deps?: V1Dependencies): Router {
   engineerRouter.post("/jobs/:reportId/notes", engineerJobs.addNote);
   engineerRouter.post("/jobs/:reportId/photos", repairPhotoLimit, uploadReportImage, engineerJobs.addPhoto);
   router.use("/engineer", engineerRouter);
+
+  // Chat between admins and engineers. Conversation membership is enforced in the service.
+  const chatRouter = Router();
+  chatRouter.use(authenticate, requireRole("ADMIN", "ENGINEER"), requirePasswordChanged);
+  chatRouter.get("/contacts", chat.contacts);
+  chatRouter.get("/conversations", chat.conversations);
+  chatRouter.post("/conversations", chat.open);
+  chatRouter.get("/conversations/:id/messages", chat.messages);
+  router.use("/chat", chatRouter);
 
   return router;
 }

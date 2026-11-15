@@ -6,7 +6,8 @@
 // Phase 2 (authentication and user management): users, OTP codes, refresh tokens.
 // Phase 3 (citizen reporting): reports, report images, AI detections, report status history.
 // Stage 4 (admin & engineer workflows): assignments, repair attempts, repair updates, repair photos.
-// Models for later phases (messages, notifications, ...) are NOT added yet.
+// Phase 5 (admin-engineer chat): conversations, chat messages.
+// Models for later phases (notifications, ...) are NOT added yet.
 
 generator client {
   provider     = "prisma-client"
@@ -67,6 +68,10 @@ model User {
   assignmentsMade     ReportAssignment[] @relation("AssignmentAssignedBy")
   repairUpdates       RepairUpdate[]
   repairPhotos        RepairPhoto[]
+
+  adminConversations    Conversation[] @relation("ConversationAdmin")
+  engineerConversations Conversation[] @relation("ConversationEngineer")
+  chatMessagesSent      ChatMessage[]
 
   @@index([role, status])
   @@index([createdAt])
@@ -370,4 +375,45 @@ model RepairPhoto {
 
   @@index([reportId, attempt])
   @@map("repair_photos")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5: admin-engineer chat
+// ---------------------------------------------------------------------------
+
+/// One private conversation per (admin, engineer) pair. Roles are enforced in the service.
+model Conversation {
+  id            String    @id @default(uuid()) @db.Uuid
+  adminId       String    @map("admin_id") @db.Uuid
+  engineerId    String    @map("engineer_id") @db.Uuid
+  /// Time of the newest message (for ordering the conversation list).
+  lastMessageAt DateTime? @map("last_message_at") @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  admin    User          @relation("ConversationAdmin", fields: [adminId], references: [id], onDelete: Restrict)
+  engineer User          @relation("ConversationEngineer", fields: [engineerId], references: [id], onDelete: Restrict)
+  messages ChatMessage[]
+
+  @@unique([adminId, engineerId])
+  @@index([engineerId])
+  @@map("conversations")
+}
+
+/// A chat message. Plain text only; never edited or deleted.
+model ChatMessage {
+  id             String   @id @default(uuid()) @db.Uuid
+  conversationId String   @map("conversation_id") @db.Uuid
+  senderId       String   @map("sender_id") @db.Uuid
+  /// Random id chosen by the sending client. A retried send with the same id returns the stored
+  /// message instead of saving a duplicate (the acknowledgement may have been lost).
+  clientId       String   @map("client_id") @db.Uuid
+  body           String   @db.VarChar(2000)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation(fields: [senderId], references: [id], onDelete: Restrict)
+
+  @@unique([senderId, clientId])
+  @@index([conversationId, createdAt, id])
+  @@map("chat_messages")
 }

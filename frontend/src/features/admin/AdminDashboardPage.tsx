@@ -57,11 +57,16 @@ export function AdminDashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-900">Dashboard</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          {data.total} report{data.total === 1 ? "" : "s"} in total · {data.activeEngineers} active engineer{data.activeEngineers === 1 ? "" : "s"}
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold text-slate-900">Dashboard</h1>
+          <p className="mt-1 text-sm text-slate-500">
+            {data.total} report{data.total === 1 ? "" : "s"} in total · {data.activeEngineers} active engineer{data.activeEngineers === 1 ? "" : "s"}
+          </p>
+        </div>
+        <Link to="/admin/analytics" className="text-sm font-medium text-blue-700 hover:underline">
+          Charts and trends →
+        </Link>
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">

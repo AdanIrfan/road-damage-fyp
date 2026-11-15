@@ -128,6 +128,14 @@ export function EngineerDetailPage() {
         </div>
         <div className="flex items-center gap-3">
           <Badge tone={statusTone[engineer.status]}>{statusLabel[engineer.status]}</Badge>
+          {engineer.status === "ACTIVE" && (
+            <Link
+              to={`/chat?with=${engineer.id}`}
+              className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+            >
+              Send message
+            </Link>
+          )}
           <Button variant={engineer.status === "ACTIVE" ? "danger" : "primary"} loading={statusBusy} onClick={() => void toggleStatus()}>
             {engineer.status === "ACTIVE" ? "Deactivate" : "Activate"}
           </Button>

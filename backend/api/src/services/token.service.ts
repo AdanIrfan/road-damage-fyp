@@ -14,6 +14,8 @@ import { addSeconds, type Clock } from "./clock.js";
 export interface AccessTokenClaims {
   userId: string;
   role: UserRole;
+  /** When the token expires (from the verified `exp` claim). */
+  expiresAt: Date;
 }
 
 export type AccessTokenResult =
@@ -86,10 +88,10 @@ export function createTokenService(deps: { prisma: PrismaClient; jwtKey: Uint8Ar
           currentDate: clock(),
         });
         const role = VALID_ROLES.find((value) => value === payload["role"]);
-        if (typeof payload.sub !== "string" || role === undefined) {
+        if (typeof payload.sub !== "string" || role === undefined || typeof payload.exp !== "number") {
           return { ok: false, reason: "invalid" };
         }
-        return { ok: true, claims: { userId: payload.sub, role } };
+        return { ok: true, claims: { userId: payload.sub, role, expiresAt: new Date(payload.exp * 1000) } };
       } catch (error) {
         return { ok: false, reason: error instanceof joseErrors.JWTExpired ? "expired" : "invalid" };
       }

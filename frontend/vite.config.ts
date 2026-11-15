@@ -20,6 +20,8 @@ export default defineConfig(({ mode }) => {
         "/api": {
           target: env["API_PROXY_TARGET"] || "http://localhost:3000",
           changeOrigin: false,
+          // Also proxies the chat WebSocket (/api/v1/chat/ws), so it stays same-origin with its cookie.
+          ws: true,
         },
       },
     },

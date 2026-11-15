@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { OTP_LENGTH, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from "../config/auth.js";
+import { CHAT_HISTORY_DEFAULT_LIMIT, CHAT_HISTORY_MAX_LIMIT, CHAT_MESSAGE_MAX_LENGTH } from "../config/chat.js";
 import { DESCRIPTION_MAX_LENGTH, REPORT_LIST_MAX_PAGE_SIZE } from "../config/reports.js";
 import {
   ADMIN_NOTE_MAX_LENGTH,
@@ -293,3 +294,58 @@ export const repairPhotoParamsSchema = z.strictObject({
   id: z.uuid({ error: "Invalid report id." }),
   photoId: z.uuid({ error: "Invalid photo id." }),
 });
+
+// ---------------------------------------------------------------------------
+// Phase 5: admin–engineer chat
+// ---------------------------------------------------------------------------
+
+export const conversationIdParamsSchema = z.strictObject({
+  id: z.uuid({ error: "Invalid conversation id." }),
+});
+
+export const openConversationSchema = z.strictObject({
+  userId: z.uuid({ error: "Choose a person to chat with." }),
+});
+
+export const chatHistoryQuerySchema = z
+  .strictObject({
+    after: z.uuid({ error: "Invalid message id." }).optional(),
+    before: z.uuid({ error: "Invalid message id." }).optional(),
+    limit: z.coerce
+      .number()
+      .int("Limit must be a whole number.")
+      .min(1, "Limit must be 1 or more.")
+      .max(CHAT_HISTORY_MAX_LIMIT, `Limit must be at most ${CHAT_HISTORY_MAX_LIMIT}.`)
+      .default(CHAT_HISTORY_DEFAULT_LIMIT),
+  })
+  .refine((q) => q.after === undefined || q.before === undefined, {
+    message: "Use either after or before, not both.",
+    path: ["before"],
+  });
+
+/**
+ * A message sent over the WebSocket. clientId is a random UUID made by the client; resending the
+ * same clientId never stores a second copy. The body is plain text (rendered as text, never HTML).
+ */
+export const chatSendFrameSchema = z.strictObject({
+  type: z.literal("send", { error: "Unknown message type." }),
+  clientId: z.uuid({ error: "Invalid client message id." }),
+  conversationId: z.uuid({ error: "Invalid conversation id." }),
+  body: requiredText("Message", CHAT_MESSAGE_MAX_LENGTH),
+});
+
+// ---------------------------------------------------------------------------
+// Phase 5: admin analytics
+// ---------------------------------------------------------------------------
+
+/** Every chart uses the same range of report submission dates (UTC days, both ends included). */
+export const analyticsQuerySchema = z
+  .strictObject({
+    from: isoDate.optional(),
+    to: isoDate.optional(),
+    granularity: z.enum(["day", "week", "month"], { error: "Granularity must be day, week or month." }).optional(),
+  })
+  .refine((q) => q.from === undefined || q.to === undefined || q.from <= q.to, {
+    message: "The start date must not be after the end date.",
+    path: ["to"],
+  });

@@ -276,3 +276,31 @@ export interface EngineerSummary {
   completed: number;
   needsMoreWork: number;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5: admin analytics (mirrors backend src/services/analytics.service.ts)
+// ---------------------------------------------------------------------------
+
+export type AnalyticsGranularity = "day" | "week" | "month";
+
+export interface AdminAnalytics {
+  range: { from: string | null; to: string | null; granularity: AnalyticsGranularity };
+  total: number;
+  overTime: { period: string; count: number }[];
+  byStatus: Record<ReportStatus, number>;
+  bySeverity: Record<SeverityLevel | "NONE", number>;
+  damageClasses: { byClass: { className: string; reports: number }[]; noDetections: number; aiFailed: number };
+  repairProgress: { unassigned: number; pending: number; working: number; awaitingConfirmation: number; completed: number };
+  engineerWorkload: {
+    engineerId: string;
+    fullName: string;
+    status: "PENDING_VERIFICATION" | "ACTIVE" | "DEACTIVATED";
+    open: number;
+    awaitingConfirmation: number;
+    completed: number;
+  }[];
+  location: {
+    byStatus: { status: LocationVerificationStatus; reports: number; needsReview: number }[];
+    needsReview: number;
+  };
+}

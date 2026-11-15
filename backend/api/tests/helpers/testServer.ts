@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { createServer } from "node:http";
+import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Express } from "express";
 
@@ -8,9 +8,13 @@ export interface TestServer {
   close: () => Promise<void>;
 }
 
-/** Starts the app on a random free port on 127.0.0.1. */
-export async function startTestServer(app: Express): Promise<TestServer> {
+/**
+ * Starts the app on a random free port on 127.0.0.1.
+ * `onServer` can attach extra handlers to the HTTP server (e.g. the chat WebSocket gateway).
+ */
+export async function startTestServer(app: Express, onServer?: (server: Server) => void): Promise<TestServer> {
   const server = createServer(app);
+  onServer?.(server);
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const { port } = server.address() as AddressInfo;

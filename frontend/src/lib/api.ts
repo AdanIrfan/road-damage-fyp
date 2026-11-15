@@ -13,6 +13,13 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 /** Auth endpoints that must never trigger an automatic refresh. */
 const NO_REFRESH_PATHS = ["/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/logout", "/api/v1/auth/register", "/api/v1/auth/otp"];
 
+/** Absolute ws:// or wss:// URL for a backend path (same origin as the API, so the session cookie is sent). */
+export function webSocketUrl(path: string): string {
+  const base = new URL(API_BASE_URL || window.location.origin, window.location.href);
+  base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
+  return new URL(path, base).toString();
+}
+
 export type FieldErrors = Record<string, string[] | undefined>;
 
 export class ApiError extends Error {

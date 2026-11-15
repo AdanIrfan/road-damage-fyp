@@ -8,7 +8,7 @@ A Final Year Project web application that connects three groups:
 
 A YOLOv8 model, already trained on the RDD2022 road damage dataset, analyses each uploaded photograph. It returns the damage class, a confidence score and bounding boxes, which the system uses to make an initial severity estimate.
 
-> **Project status:** Stage 4 — authentication (Phase 2), citizen reporting with AI analysis (Stage 3) and the **admin and engineer workflows** (Stage 4) are implemented. Chat and analytics are **not implemented yet**. See [What works today](#what-works-today) and [Known limitations](#known-limitations).
+> **Project status:** Phase 5 — authentication (Phase 2), citizen reporting with AI analysis (Stage 3), the admin and engineer workflows (Stage 4) and **admin–engineer chat and admin analytics** (Phase 5) are implemented. Priority, duplicate detection, admin/engineer notifications and a real SMS provider are **not implemented**. See [What works today](#what-works-today) and [Known limitations](#known-limitations).
 
 ## Purpose
 
@@ -32,9 +32,9 @@ Road damage is often reported late, through informal channels, or not at all. Th
 | AI service | Python + FastAPI |
 | AI model | YOLOv8 + PyTorch (existing `best.pt`, inference only) |
 | Authentication | JWT in httpOnly cookies, refresh-token rotation, Argon2id passwords |
-| Charts | Recharts |
+| Charts | Recharts 3 (admin analytics) |
 | Maps | OpenStreetMap + Leaflet |
-| Real-time communication | WebSockets (admin–engineer chat) |
+| Real-time communication | WebSockets with the `ws` library (admin–engineer chat) |
 | Citizen notifications | SMS (provider not yet selected) |
 
 ## How the system is organised
@@ -90,9 +90,14 @@ The main backend calls the AI service over an internal URL (`AI_SERVICE_URL`) wi
 - **Completion:** the engineer's Completed status does not finish the report; an admin checks the current attempt and confirms, and only then is the report `completed`.
 - **Citizen updates:** the citizen sees rejection/delay reasons and repair progress, and gets an SMS when the report is accepted, rejected, delayed or completed (mock SMS in development).
 
+**Admin–engineer chat and analytics (Phase 5):**
+
+- **Chat (Messages page):** private one-to-one conversations between an admin and an engineer. Each admin–engineer pair has its own conversation; another admin or engineer cannot see it. Messages appear on the other side immediately (WebSocket), are stored in PostgreSQL, and the history stays after a refresh or reconnect. Plain text only, up to 2,000 characters, 30 messages per minute per user. If the connection drops, the page reconnects by itself, sends anything typed during the outage, and loads messages that were missed. Admins can also open a chat from an engineer's page. Citizens have no chat. There are no read receipts, typing indicators, attachments or unread counts (not in scope).
+- **Analytics (admin):** charts of reports submitted over time, reports by status, by estimated severity (admin correction where set), damage types detected, repair progress, engineer workload and location verification results, for a chosen period (7 / 30 / 90 days, 12 months, all time or custom dates). Every number comes from the stored reports; each report is counted once, so reassignments and repeated repair attempts do not inflate the figures.
+
 ## Feature plan
 
-The original plan is below. Everything in it is implemented **except**: admin–engineer chat, dashboard charts/analytics, and notifications for admins and engineers (the channel is not decided). Citizens' SMS uses the development mock sender until a provider is chosen.
+The original plan is below. Everything in it is implemented **except**: notifications for admins and engineers (the channel is not decided), and prioritisation (the priority rule is not decided). Citizens' SMS uses the development mock sender until a provider is chosen.
 
 ### Citizen
 - Self-registration with mobile number verification (by SMS code)
@@ -131,7 +136,7 @@ Each report has a **report status**, managed by admins:
 
 `submitted` → `under_review` → `accepted` / `rejected` / `delayed` → … → `completed`
 
-- A report moves to `under_review` only when an admin clicks **Review**. Opening a report changes nothing.
+- A report moves to `under_review` only when an admin clicks **Start review**. Opening a report changes nothing.
 - A `delayed` report stays delayed until an admin decides again (accept, reject, or keep delayed with a new reason).
 - `rejected` and `completed` are final.
 - After an engineer marks the repair **Completed**, an admin confirms it, and only then does the report become `completed`.
@@ -149,10 +154,11 @@ road-damage-fyp/
 ├── CLAUDE.md          # Project guide: requirements, rules and open decisions
 ├── README.md
 ├── frontend/          # React + Vite + Tailwind client (TypeScript)
-│   └── src/           # features/ (auth, admin, ...), pages/, layouts/, routes/, lib/api.ts
+│   └── src/           # features/ (auth, citizen, admin, engineer, chat), pages/, layouts/, routes/,
+│                      # lib/api.ts (HTTP client), lib/chatSocket.ts (chat WebSocket client)
 ├── backend/
 │   ├── api/           # Node.js + Express main backend (TypeScript)
-│   │   ├── src/       # routes → controllers → services → Prisma
+│   │   ├── src/       # routes → controllers → services → Prisma; realtime/ (chat WebSocket)
 │   │   ├── prisma/    # schema.prisma + migrations/
 │   │   ├── storage/uploads/  # Runtime uploads (not tracked in Git)
 │   │   └── tests/     # node:test suite
@@ -225,7 +231,9 @@ npm install
 npm run dev                 # http://localhost:5173 (proxies /api to the backend)
 ```
 
-Open http://localhost:5173, register as a citizen, read the 6-digit code from the backend console, verify, log in and report damage. Log in with the admin account to review reports and create engineers; engineers log in with their temporary password, change it, and see their assigned jobs.
+Open http://localhost:5173, register as a citizen, read the 6-digit code from the backend console, verify, log in and report damage. Log in with the admin account to review reports and create engineers; engineers log in with their temporary password, change it, and see their assigned jobs. Admins and engineers can message each other under **Messages**; admins see charts under **Analytics**.
+
+The chat uses a WebSocket at `/api/v1/chat/ws` on the same server; the Vite dev server proxies it together with `/api` (`ws: true`), so no extra setup is needed.
 
 Live camera and GPS work only on `http://localhost` or HTTPS. Desktop browsers usually locate by Wi-Fi, which can be hundreds of metres off; phones with GPS outdoors are much more accurate.
 
@@ -237,6 +245,8 @@ cd frontend && npm run build          # includes the TypeScript check
 ```
 Backend database tests use a separate `app_test` schema in the same database and never touch your real tables. There are no frontend unit tests yet (tool not chosen).
 
+After pulling Phase 5, apply the new chat tables with `npm run prisma:migrate:deploy` (in `backend/api`). The migration only adds the `conversations` and `chat_messages` tables.
+
 ### Health endpoints
 - http://localhost:3000/api/health — API is running
 - http://localhost:3000/api/health/db — PostgreSQL is reachable
@@ -244,10 +254,12 @@ Backend database tests use a separate `app_test` schema in the same database and
 ## Known limitations
 
 - **SMS:** only the development "mock" sender exists; messages are printed to the backend console. Production refuses to start until a real provider is added. If the server stops between saving a decision and sending its SMS, that SMS is lost (there is no outbox).
-- **Notifications for admins and engineers:** none yet; engineers see new jobs on their dashboard.
+- **Notifications for admins and engineers:** none yet; engineers see new jobs on their dashboard, and new chat messages appear only while the Messages page is open (there are no unread counts or alerts).
+- **Chat:** one server process only (open connections are tracked in memory; several processes would need shared messaging such as Redis, which is out of scope). Plain text only. An open chat connection stays usable until its 15-minute access token expires even after logout or a password change (the same as the rest of the API); deactivation stops it at the next message.
+- **Analytics:** dates are UTC days. The engineer workload chart credits each report to its current engineer. The time series is grouped in the backend from one timestamp per report, which is fine at project scale but not designed for very large data.
 - **AI model:** only the `pothole` class has been checked on a real photo; the three crack classes have not been tested yet. Severity is a heuristic estimate.
 - **Location accuracy:** depends on the device; laptops often have no GPS. Poor accuracy is flagged for review, never rejected.
 - **Sessions:** an access token issued before logout, deactivation or a password reset stays valid for up to 15 minutes.
 - **Rate limits** are kept in memory (they reset on restart and assume a single server process).
-- **Frontend bundle** is about 530 kB (160 kB compressed); Vite warns above 500 kB. Loading the admin and engineer pages on demand would reduce it.
-- **Not implemented yet:** chat, analytics/charts, priority, duplicate detection, HEIC photos, forgot-password for users in the app.
+- **Frontend bundle** is about 913 kB (265 kB compressed) since Recharts was added; Vite warns above 500 kB. Loading the analytics, admin and engineer pages on demand would reduce it.
+- **Not implemented yet:** priority, duplicate detection, notifications for admins and engineers, a real SMS provider, chat attachments/read receipts, HEIC photos, forgot-password for users in the app.

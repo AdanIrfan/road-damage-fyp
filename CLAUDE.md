@@ -2,12 +2,13 @@
 
 **Project:** AI-Powered Road Infrastructure Damage Detection, Severity Assessment and Maintenance Management System
 **Type:** Final Year Project (FYP)
-**Status:** Stage 4 (admin and engineer dashboards and workflows) implemented — not yet committed.
+**Status:** Phase 5 (admin–engineer chat and admin analytics) implemented and committed separately from Stage 4 (`003b4b9`).
 - **Phase 1 — backend foundation:** Express + TypeScript + Prisma, health endpoints, CORS, error handling, tests.
 - **Phase 2 — authentication and user management:** citizen registration with SMS OTP verification (mock SMS in development only), login/logout, cookie-based JWT sessions with refresh-token rotation, CSRF protection, role-based authorization, admin bootstrap CLI, admin engineer management, and the React frontend for all of these.
 - **Phase 3 — citizen reporting and AI integration:** report submission (live camera + browser GPS, or gallery upload + map pick), secure image storage (private original + metadata-free display copy), EXIF location verification, the Python + FastAPI AI service running the trained `best.pt`, Node-side estimated severity, the citizen dashboard (list, summary, detail with detection boxes and map), and tests (2026-11-14).
 - **Stage 4 — admin and engineer workflows (2026-11-14):** admin dashboard, report list (search/filter/paginate) and detail; Review / Accept / Reject / Delay / Keep delayed with reasons and status history; severity correction; engineer suggestions and (re)assignment; engineer dashboard, job detail, repair status per **repair attempt**, notes, repair photos (1–5 per attempt), work history; admin "needs more work" feedback and completion confirmation; citizen decision reason and repair progress; citizen SMS on Accepted/Rejected/Delayed/Completed (mock in development).
-- **Not implemented yet:** chat, analytics, priority, duplicate detection, notifications for admins/engineers, a real SMS provider.
+- **Phase 5 — maps, communication and analytics (2026-11-15):** one-to-one admin–engineer chat (WebSocket `ws` + REST history, PostgreSQL persistence, idempotent sends by `clientId`, reconnect with catch-up), admin analytics page with Recharts (real report data, one shared date range). Maps/EXIF/GPS and citizen SMS were verified, not rebuilt.
+- **Not implemented yet:** priority, duplicate detection, notifications for admins/engineers (channel undecided), a real SMS provider, chat attachments/read receipts/typing/unread counts.
 - **Model validation status:** only the `pothole` class has been exercised with a real photo (one Wikimedia Commons image, detected at confidence ≈ 0.69). `longitudinal_crack`, `transverse_crack` and `alligator_crack` have **not** been tested yet; they will be tested later with the owner's RDD2022 data. Never claim the model is validated for all four classes.
 
 This file is the main reference for anyone (human or AI) working in this repository. If anything here conflicts with an explicit instruction from the project owner, the owner's instruction wins. Update this file when decisions are made.
@@ -170,6 +171,14 @@ Implementation (Stage 4, agreed 2026-11-14) — **repair attempts:**
 - Messages are stored in PostgreSQL so the history is kept.
 - Read/delivered status and attachments are optional and must be agreed first.
 
+Implementation (Phase 5, agreed 2026-11-15):
+- **Who:** admins chat with ACTIVE engineers, engineers with ACTIVE admins (both must have changed their temporary password). Citizens have no chat (router, gateway and service all refuse them). A conversation is opened with `POST /chat/conversations { userId }` (idempotent; the unique `(admin_id, engineer_id)` pair keeps one row even when both sides open it at once). History with a later-deactivated user stays readable; new messages to an inactive account are refused (409 `CHAT_RECIPIENT_INACTIVE`).
+- **Sending** happens over the WebSocket (`{type:"send", clientId, conversationId, body}`); REST serves history. The message is stored (transaction: insert + `last_message_at`) **before** the sender gets `ack`; then the recipient's sockets and the sender's other tabs get `message`.
+- **Idempotency:** `clientId` is a client-generated UUID, unique per sender in the database. A resend with the same `clientId`, conversation and (trimmed) body returns the stored message (`ack`, no second push); a different conversation or body is refused (409 `CHAT_CLIENT_ID_CONFLICT`). Concurrent duplicates hit the unique index (P2002) and return the stored row.
+- **Limits:** body 1–2000 characters after trimming (`CHAT_MESSAGE_MAX_LENGTH`), 30 messages per minute per user (in memory, all of the user's sockets), WebSocket frames over 16 KB are closed (1009). Constants in `src/config/chat.ts`.
+- **Reconnect:** the client (`frontend/src/lib/chatSocket.ts`) reconnects with backoff (0.5 s … 30 s), keeps unacknowledged messages and resends them with the same `clientId`, and after every (re)connect fetches missed messages with `GET …/messages?after=<last id>`. On close code 4001 or a failed handshake it checks the session with `GET /auth/me` (which refreshes an expired session); only a 401/403 stops it, a network error or 5xx just retries. Close code 4003 (account may no longer chat) stops it.
+- No unread counts, read receipts, typing indicators or attachments (not in scope).
+
 ### Status model
 Report status and engineer repair status are **separate fields**. Never merge them.
 
@@ -214,6 +223,10 @@ Added in Phase 3 (approved 2026-11-14):
 - **Main backend:** `multer` (multipart uploads, memory storage with limits), `exifr` (EXIF GPS), `sharp` (metadata-free JPEG display copy). File type is checked with our own magic-byte check.
 - **Frontend:** `leaflet` + `react-leaflet` (OpenStreetMap maps), `@types/leaflet`.
 - **AI service (Python 3.12.16, managed with `uv`, venv `backend/ai/.venv`):** `torch 2.15.0+cpu`, `torchvision 0.29.2+cpu` (CPU-only wheels), `ultralytics 8.4.212`, `fastapi 0.162.7`, `starlette 1.10.0`, `uvicorn 0.54.0`, `python-multipart`, `pydantic`, `pydantic-settings`, `pillow`, `numpy`; tests: `pytest`, `httpx`. Exact pins are in `backend/ai/requirements.txt` / `requirements-dev.txt`. (Starlette warns that its test client prefers `httpx2`; `httpx` still works.)
+
+Added in Phase 5 (approved 2026-11-15):
+- **Main backend:** `ws` 8.23 (+ `@types/ws`) — WebSocket server attached to the existing `http.Server` (`noServer` + manual `handleUpgrade`). Node 24 has a WebSocket client but no server; `ws` is dependency-free. Socket.IO was rejected (own protocol, client library, fallbacks not needed).
+- **Frontend:** `recharts` 3.10 — admin analytics charts (already in the stack table, first installed in Phase 5).
 
 Library choices not listed here (for example the request validation library, the WebSocket library, the EXIF library, password hashing, or frontend state management) must be **proposed to the owner and approved** before use.
 
@@ -292,7 +305,7 @@ src/
 │   ├── index.ts           everything under /api (health + /v1)
 │   ├── health.routes.ts   /api/health, /api/health/db
 │   └── v1/index.ts        /api/v1 router: auth, profile and admin routes (all application routes go here)
-├── controllers/           request/response handling (thin): auth, profile, engineers, reports, health
+├── controllers/           request/response handling (thin): auth, profile, engineers, reports, adminReports, engineerJobs, chat, analytics, health
 ├── services/              business logic and database access
 │   ├── index.ts           createServices(): wires all services (used by index.ts and tests)
 │   ├── auth.service.ts    register, verify mobile, login, refresh, logout, change password
@@ -309,6 +322,8 @@ src/
 │   ├── assignment.service.ts   engineer suggestions (agreed formula), assign/reassign (new attempt)
 │   ├── engineerJob.service.ts  engineer jobs: list/detail, repair status per attempt, notes, repair photos, photo access
 │   ├── repairViews.ts     repair attempts grouping (shared by admin and engineer views)
+│   ├── chat.service.ts    chat: contacts, conversations (open = idempotent), history paging, send (membership, active recipient, clientId idempotency)
+│   ├── analytics.service.ts  admin analytics (Prisma groupBy/findMany only; one count per report; UTC day/week/month buckets)
 │   ├── notification.service.ts citizen status SMS (after commit, never throws, masked logging)
 │   ├── severity.ts        estimateSeverity() (heuristic estimate)
 │   ├── ai/aiClient.ts     AiClient interface + HTTP client for the AI service (timeout, secret header, zod-validated response)
@@ -317,6 +332,9 @@ src/
 │   ├── storage/fileStorage.ts  FileStorage (random UUID keys under originals/ and display/)
 │   ├── sms/               SmsSender interface + MockSmsSender (development only)
 │   └── clock.ts           injectable clock (tests simulate expiry)
+├── realtime/chatGateway.ts  chat WebSocket (/api/v1/chat/ws): handshake auth (Origin, JWT via TokenService, active account, role,
+│                          password changed), per-message re-check + zod + rate limit, ack after persistence, push, expiry (4001), heartbeat
+├── config/chat.ts         chat limits, WS path, close codes
 ├── middleware/            cors, csrf, auth (authenticate / requireRole / requirePasswordChanged), rateLimit, upload (multer), errorHandler, notFound, requestLogger
 ├── validation/schemas.ts  zod schemas for every request body, params and query
 ├── scripts/               createAdmin.ts (`npm run admin:create`), resetPassword.ts + accountPasswordReset.ts
@@ -328,8 +346,9 @@ prisma/
 ├── schema.prisma          User, OtpCode, RefreshToken, Report, ReportImage, AiDetection, ReportStatusHistory
 └── migrations/            committed SQL migrations
 tests/
-├── *.test.ts              node:test test files (auth, admin, reports, reportUnits, aiClient, cors, env, errorHandling, health)
-├── helpers/               startTestServer, testDb (isolated test schema), authTestApp (fake SMS, fake AI, temp upload dir, test clock,
+├── *.test.ts              node:test test files (auth, admin, reports, reportUnits, aiClient, cors, env, errorHandling, health,
+│                          reportWorkflow, adminReports, assignments, engineerJobs, passwordReset, chat, analytics)
+├── helpers/               chatSocket (ws test client), workflowFixtures, startTestServer (optional onServer hook), testDb (isolated test schema), authTestApp (fake SMS, fake AI, temp upload dir, test clock, chat gateway,
 │                          cookie/CSRF/multipart client), fakeAi, testImages (JPEG/PNG, hand-built EXIF GPS)
 └── tsconfig.json          type-checks tests together with src/
 ```
@@ -349,9 +368,12 @@ src/
 │                                ChangePasswordPage (forced for temporary passwords), ChangePasswordForm
 ├── features/admin/              engineersApi, EngineersPage (+ open jobs), EngineerDetailPage (+ workload, jobs), CreateEngineerForm,
 │                                adminReportsApi, AdminDashboardPage, AdminReportsPage (filters in the URL), AdminReportTable,
-│                                AdminReportDetailPage (action panel from server-side allowedActions), AssignEngineerDialog
+│                                AdminReportDetailPage (action panel from server-side allowedActions), AssignEngineerDialog,
+│                                analyticsApi, AdminAnalyticsPage (Recharts; period/granularity in the URL)
 ├── features/engineer/           engineerJobsApi, EngineerDashboardPage, EngineerJobList, EngineerJobDetailPage (attempt N,
 │                                photos per attempt, notes, reopen), EngineerHistoryPage
+├── features/chat/               chatApi (contacts, conversations, history), ChatPage (contact list + thread, pending/failed/retry, plain-text bubbles)
+├── lib/chatSocket.ts            the ONLY WebSocket client (reconnect/backoff, idempotent resend, session check); lib/chatTypes.ts
 ├── features/citizen/            reportsApi, CitizenDashboardPage (summary + list), NewReportPage, LiveCameraCapture
 │                                (getUserMedia + geolocation), GalleryPicker, ReportDetailPage (decision reason, repair progress)
 ├── components/reports/          shared: ReportPhoto, LocationMap (+ EXIF comparison point), SeverityNote, labels,
@@ -366,13 +388,13 @@ src/
 ├── utils/format.ts              labels and date formatting
 └── styles/index.css             Tailwind entry
 ```
-- Routes: `/login`, `/register`, `/verify` (logged-out only); `/profile` (all roles); `/reports`, `/reports/new`, `/reports/:id` (CITIZEN only); `/admin/engineers`, `/admin/engineers/:id` (ADMIN only); `/change-password` (forced while `mustChangePassword`); `/` redirects by role (admin → engineers, citizen → reports, engineer → profile).
+- Routes: `/login`, `/register`, `/verify` (logged-out only); `/profile` (all roles); `/reports`, `/reports/new`, `/reports/:id` (CITIZEN only); `/admin`, `/admin/analytics`, `/admin/reports`, `/admin/reports/:id`, `/admin/engineers`, `/admin/engineers/:id` (ADMIN only); `/engineer`, `/engineer/jobs/:id`, `/engineer/history` (ENGINEER only); `/chat?with=<userId>` (ADMIN and ENGINEER); `/change-password` (forced while `mustChangePassword`); `/` redirects by role (admin → `/admin`, citizen → `/reports`, engineer → `/engineer`).
 - Report photos are fetched through `apiBlob` (session cookie) and shown from object URLs; there are no public image URLs.
 - Maps (`lib/map.ts`): tiles from `https://tile.openstreetmap.org/{z}/{x}/{y}.png` with `referrerPolicy: strict-origin-when-cross-origin` (OSM requires a Referer; Helmet's default `no-referrer` page policy would otherwise block tiles if the frontend is ever served with it). `L.Icon.Default.imagePath = ""` is required: Leaflet otherwise prepends a folder detected from leaflet.css to the bundler's marker URLs and the marker 404s. `LocationMap` re-measures itself when its container resizes and shows a message if no tile can be loaded.
 - Live camera location (`LiveCameraCapture`): a fresh `watchPosition` (`enableHighAccuracy: true`, `maximumAge: 0`) starts when the step opens; the citizen sees the live coordinates and reported accuracy; the photo uses the most precise reading the device reported in the last 30 s (an unmodified real reading). Accuracy worse than 100 m shows a warning (UI hint only; the backend's `GPS_ACCURACY_THRESHOLD_METERS` decides and flags the report). Permission denied / unavailable / timeout show explanations and a "Try location again" button. `enableHighAccuracy` does not guarantee GPS: laptops/desktops often only have Wi-Fi/IP positioning (hundreds of metres or more).
 - `public/favicon.svg` is the site icon.
 - Tokens are **never** stored in `localStorage`/`sessionStorage`; the CSRF token is kept in memory only.
-- In development the Vite dev server proxies `/api` to the backend (`API_PROXY_TARGET`, default `http://localhost:3000`), so the browser sees one origin.
+- In development the Vite dev server proxies `/api` to the backend (`API_PROXY_TARGET`, default `http://localhost:3000`), including the chat WebSocket (`ws: true`), so the browser sees one origin and the session cookie reaches the WebSocket handshake.
 
 ### Separation of responsibilities
 - **Frontend:** presentation, user input, client-side validation for user experience, camera/GPS capture, map display. It **never** makes security decisions; the UI hiding something is not access control.
@@ -426,6 +448,10 @@ src/
   - `otp_codes`: `user_id` (→ users, CASCADE), `purpose`, `code_hash` (HMAC, never the code), `expires_at`, `attempts`, `consumed_at`, `created_at`. Index on (`user_id`, `purpose`, `created_at`).
   - `refresh_tokens`: `user_id` (→ users, CASCADE), `token_hash` (**unique**, SHA-256), `family_id`, `expires_at`, `revoked_at`, `replaced_by_id` (→ refresh_tokens, unique), `created_at`. Indexes on `user_id`, `family_id`, `expires_at`.
   - Timestamps are `timestamptz(3)`; table/column names are snake_case (`@@map`/`@map`).
+- **Phase 5** migration `20261115120000_phase5_chat` (owner reviewed the final SQL; additive only — 2 new tables, 4 indexes, 4 foreign keys, no change to existing tables; applied to `public` and `app_test` with `migrate deploy` on 2026-11-15, no drift afterwards):
+  - `conversations`: `id`, `admin_id`, `engineer_id` (→ users, RESTRICT), `last_message_at`, `created_at`; **unique (`admin_id`, `engineer_id`)** = one conversation per pair; index on `engineer_id`. Roles are enforced in the service (the database cannot express them).
+  - `chat_messages`: `id`, `conversation_id` (→ conversations, CASCADE), `sender_id` (→ users, RESTRICT), `client_id` (uuid), `body` VARCHAR(2000), `created_at`; **unique (`sender_id`, `client_id`)** for idempotent sends; index (`conversation_id`, `created_at`, `id`) for history paging. Messages are never edited or deleted.
+- Analytics needed **no** schema change.
 - **Stage 4** migration `20261114180000_stage4_assignments_repairs` (owner reviewed the full SQL; additive only: enums `RepairStatus` (PENDING, WORKING, COMPLETED) and `RepairUpdateKind` (STATUS_CHANGE, NOTE, ADMIN_FEEDBACK); nullable `reports.assigned_engineer_id` (→ users, SET NULL), `assigned_at`, `repair_status`, `repair_status_updated_at`, `repair_attempt`; tables `report_assignments`, `repair_updates`, `repair_photos` (each with an `attempt` column; users RESTRICT so history cannot be lost; reports CASCADE); indexes; applied to `public` and `app_test` with `migrate deploy`).
 - **Phase 3** migration `20261114120000_citizen_reports` (additive only: 5 enum types, 4 tables, indexes, foreign keys; applied to `public` with `migrate deploy`):
   - Enums: `ReportStatus` (SUBMITTED, UNDER_REVIEW, ACCEPTED, REJECTED, DELAYED, COMPLETED), `CaptureMethod` (LIVE_CAMERA, GALLERY_UPLOAD), `LocationVerificationStatus` (VERIFIED, MISMATCH, NO_METADATA, NOT_CHECKED, BROWSER_GPS), `AiAnalysisStatus` (COMPLETED, FAILED), `SeverityLevel` (LOW, MEDIUM, HIGH).
@@ -442,6 +468,8 @@ src/
 - The client is generated by the `prisma-client` generator (ES modules) into `src/generated/prisma/` and imported from `src/generated/prisma/client.js`.
 - The app connects through the `PrismaPg` driver adapter, which owns the connection pool (5 s connection timeout). The `?schema=` URL parameter is read in `src/db/prisma.ts` and passed to the adapter, because the adapter does not read it from the URL.
 - Create **one** `PrismaClient` per process (in `src/index.ts`) and inject it; it is disconnected on shutdown.
+- **Raw SQL does not follow the configured schema.** The `PrismaPg` `schema` option only qualifies the queries Prisma generates; `$queryRaw`/`$executeRaw` use PostgreSQL's default `search_path` (so in tests they would hit `public`, not `app_test`). Prefer the query API (analytics uses `groupBy`/`findMany` only); any raw SQL must schema-qualify table names.
+- **A `create`/`update` whose `select` loads relations** runs in an implicit transaction and triggers the same pg deprecation as below. Create with a plain select, then read the view separately (done in `chat.service.ts` `openConversation`, found 2026-11-15).
 - **Do not use the array form `prisma.$transaction([...])` for read queries that load relations** (e.g. a page + count). Inside such a batch, Prisma 7's query engine loads relations in parallel on the transaction's single pg connection, which pg 8.23 reports as a deprecation ("Calling client.query() when the client is already executing a query") and pg 9 will reject. Use `Promise.all([...])` instead (READ COMMITTED gives no snapshot across statements anyway). Interactive transactions for writes are unaffected. Check with `NODE_OPTIONS=--throw-deprecation npm test` (found and fixed 2026-11-15 in the admin list, engineer job list/summary and citizen list).
 
 #### Database migration policy
@@ -537,12 +565,20 @@ Expectations:
   | `PATCH /engineer/jobs/:reportId/repair-status` | ENGINEER | `{ status: WORKING\|COMPLETED, expectedAttempt, note? }` |
   | `POST /engineer/jobs/:reportId/notes` | ENGINEER | `{ note, expectedAttempt }` |
   | `POST /engineer/jobs/:reportId/photos` | ENGINEER | multipart `image` + `expectedAttempt`; 30/hour per engineer |
+  | `GET /admin/analytics?from&to&granularity` | ADMIN | analytics (see §7.3 Analytics); `from`/`to` = YYYY-MM-DD UTC, inclusive; `granularity` day\|week\|month (default by span); ≤ 1000 periods |
+  | `GET /chat/contacts` | ADMIN, ENGINEER | active counterparts only: `{ id, fullName, role, status }` |
+  | `GET /chat/conversations` | ADMIN, ENGINEER | own conversations, newest activity first, with contact and last message |
+  | `POST /chat/conversations` | ADMIN, ENGINEER | `{ userId }` → get or create the pair's conversation (active counterpart only, else 404 `CHAT_CONTACT_NOT_FOUND`) |
+  | `GET /chat/conversations/:id/messages?after\|before&limit` | ADMIN, ENGINEER (members only) | history oldest first, `{ messages, hasMore }`; `after` = catch-up after reconnect, `before` = older page; limit ≤ 100 (default 50); non-member → 404 |
+  | `GET /chat/ws` (WebSocket upgrade) | ADMIN, ENGINEER | see §7.4 |
 
   Citizen report responses never contain storage keys, EXIF coordinates, SHA-256 hashes or admin fields.
 
   Main error codes: `VALIDATION_ERROR` (400, `details.fields` per field), `INVALID_CREDENTIALS`, `UNAUTHENTICATED`, `TOKEN_EXPIRED`, `SESSION_INVALID` (401), `FORBIDDEN`, `ACCOUNT_NOT_VERIFIED`, `ACCOUNT_DEACTIVATED`, `PASSWORD_CHANGE_REQUIRED`, `CSRF_TOKEN_INVALID`, `CORS_ORIGIN_NOT_ALLOWED` (403), `ENGINEER_NOT_FOUND` (404), `MOBILE_ALREADY_REGISTERED` (409), `OTP_INVALID`, `OTP_EXPIRED`, `OTP_ATTEMPTS_EXCEEDED` (400), `OTP_RESEND_TOO_SOON`, `OTP_RESEND_LIMIT`, `TOO_MANY_REQUESTS` (429, with `details.retryAfterSeconds` for OTP), `SMS_UNAVAILABLE` (503).
   Stage 4 adds: `REPORT_STATE_CONFLICT`, `INVALID_TRANSITION`, `REPAIR_PHOTO_REQUIRED`, `REPAIR_PHOTO_LIMIT` (409), `ENGINEER_NOT_ASSIGNABLE` (400), `JOB_NOT_FOUND`, `REPAIR_PHOTO_NOT_FOUND` (404). Admin action responses include `notification: "sent" | "failed"` when a citizen SMS was due.
   **SMS rules (Stage 4):** sent only after the transaction commits, only by the request whose state-checked update matched (no duplicates from concurrent or retried decisions), only when the status actually changes to ACCEPTED/REJECTED/DELAYED/COMPLETED (no SMS for Review, keep-delayed, severity, assignment, feedback); failures are logged with a masked number and never undo the decision. Known limitation: a crash between commit and send loses that SMS (no outbox).
+  Phase 5 adds: `CONVERSATION_NOT_FOUND`, `CHAT_CONTACT_NOT_FOUND` (404), `CHAT_RECIPIENT_INACTIVE`, `CHAT_CLIENT_ID_CONFLICT` (409); WebSocket `error` frames reuse the codes (`VALIDATION_ERROR`, `TOO_MANY_REQUESTS`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`, `FORBIDDEN`, `PASSWORD_CHANGE_REQUIRED`, `INTERNAL_ERROR`).
+  **Analytics (Phase 5):** one response with `range`, `total`, `overTime` (zero-filled periods), `byStatus`, `bySeverity` (effective `admin ?? ai`, plus `NONE`), `damageClasses` (`byClass` = distinct reports per class, `noDetections`, `aiFailed`), `repairProgress` (unassigned/pending/working/awaitingConfirmation/completed from the report's **current** state), `engineerWorkload` (open/awaitingConfirmation/completed per current engineer; every active engineer listed), `location` (per verification status with `needsReview`). Every chart uses the same report-submission date range. Counts are per report, so attempts, reassignments and multiple detections never inflate them.
   Phase 3 adds: `REPORT_NOT_FOUND`, `IMAGE_NOT_FOUND` (404), `IMAGE_REQUIRED`, `IMAGE_INVALID`, `UNEXPECTED_FIELD`, `INVALID_MULTIPART`, `MULTIPART_REQUIRED` (400), `FILE_TOO_LARGE`, `IMAGE_DIMENSIONS_TOO_LARGE` (413), `UNSUPPORTED_IMAGE_TYPE` (415).
 - Use JSON. Validate every request in the main backend with **zod** (`src/validation/schemas.ts`, adopted in Phase 2). Never return internal fields such as password hashes, OTP hashes or refresh-token hashes.
 - Use correct HTTP status codes and a consistent error format.
@@ -550,7 +586,12 @@ Expectations:
 - Uploads use `multipart/form-data`.
 - How the main backend's API is documented is to be agreed. The AI service's FastAPI docs cover only its inference endpoint(s).
 
-### 7.4 WebSocket expectations
+### 7.4 WebSocket expectations (implemented in Phase 5: `src/realtime/chatGateway.ts`)
+- **Endpoint** `ws(s)://<api origin>/api/v1/chat/ws` (under `/api` because the `access_token` cookie is scoped to `/api`).
+- **Handshake** (before the upgrade; failures get a JSON HTTP error, no socket): Origin must be in the CORS allow-list (missing Origin is refused too — protects against cross-site WebSocket hijacking); `access_token` cookie verified by `TokenService.verifyAccessToken` (jose `jwtVerify`: signature, issuer, audience, HS256, expiry; it also returns the verified `expiresAt`); account ACTIVE (`findActiveById`), role ADMIN/ENGINEER, temporary password changed.
+- **Every message:** session expiry checked (4001), account re-checked in the database (deactivation stops it at once: error + all of the user's sockets closed with 4003), zod-validated frame (strict), rate limit, conversation membership in the service.
+- The socket is closed with 4001 when the access token expires (timer); a heartbeat ping (30 s) terminates dead connections. Connections are tracked in memory (single process).
+- Known limitation: like the REST API, a socket opened before logout or a password change stays usable until its access token expires (≤ 15 min).
 - The WebSocket server runs in the **main backend** (Node.js + Express).
 - Used for admin–engineer chat. In-app notifications for admins and engineers are **not** a confirmed requirement.
 - Authenticate the WebSocket connection with a JWT. Reject unauthenticated connections.
@@ -735,6 +776,9 @@ Frontend (`frontend/.env`, optional): `VITE_API_BASE_URL` (empty in development;
   - Fakes: `FakeSms` captures OTP messages; `TestClock` simulates expiry; `FakeAiClient` replaces the AI service; uploads go to a temporary folder.
 - **AI service tests** (`backend/ai/tests/`, pytest): service key, response shape, configured thresholds, JPEG/PNG accepted, non-images/other formats/too large/too many pixels rejected, secret validation, clear error for missing weights; `test_real_model.py` loads the real `best.pt` and runs inference on a blank image (skipped when the weights are absent; it checks output format only, **not** accuracy).
 - **Stage 4 tests:** `reportWorkflow.test.ts` (all transitions, attempts, SMS rule), `adminReports.test.ts` (authorization matrix, review/decisions, reasons, keep delayed, concurrent/retried decisions with one SMS, SMS failure, severity, filters, dashboard), `assignments.test.ts` (assign/reassign attempts, not assignable, concurrency, suggestions, workload), `engineerJobs.test.ts` (full rework loop with attempt 2, per-attempt photo cap with parallel uploads, feedback rule, reassignment evidence and access, isolation, stale attempts, temporary passwords, no citizen identity/EXIF for engineers, history photo access, simultaneous confirm vs reopen, deactivated engineer + reassignment, repair-photo upload rate limit 30/hour). Backend total: 173 tests.
+- **Phase 5 tests:** `chat.test.ts` (handshake: no session, forged token, foreign/missing Origin, citizen, temporary password, expired token, wrong path; REST access by role; contacts; one conversation per pair from either side and concurrently, separate conversations for two admins; wrong-role/inactive/unknown contacts; CSRF; persist-before-ack and push; sender's other tabs; plain-text bodies; clientId idempotency incl. simultaneous duplicates, different body and different conversation; pair isolation for other admins/engineers; invalid and oversized messages, 16 KB frame limit; 30/min rate limit; reconnect catch-up with `after`, `before` paging and query validation; deactivation mid-session; 4001 on expiry), `analytics.test.ts` (UTC buckets, empty database, aggregation with effective severity, distinct damage classes, reassignment/attempt inflation, date filters incl. inclusive end day and weeks, confirmed repair after rework, invalid queries), one added assertion in `adminReports.test.ts` (no SMS for a severity correction). **Backend total: 204 tests, all passing** (2026-11-15, with `NODE_OPTIONS=--throw-deprecation`). AI service: 15 pytest tests passing.
+- **Phase 5 scripted browser verification (2026-11-15, headless Windows Chrome over CDP driven by Windows Node from scratch scripts — not committed; real AI service; API on port 3100 against `app_test`; one isolated browser context per user):** 25/25 checks — CLI-created admins, engineers replacing temporary passwords, citizen registration with mock-SMS OTP; gallery report (file + map click) analysed by the real model; Start review → Accept (1 SMS) → assign → engineer start/photo/complete → admin confirm (2nd SMS, per-report) → citizen sees Completed → engineer history; chat between two logged-in browsers (live delivery both ways, Enter and Send, HTML shown as text and not executed, history after refresh, messages missed while away, **API restarted mid-session: both pages reconnected and a message typed during the outage was delivered and stored once**), second admin and second engineer cannot see the conversation (UI empty, API 404), citizens redirected/403; analytics charts render, totals equal the API and an independent database count, each period choice sends the right date range, empty range shows empty states, non-admins redirected; no horizontal scroll at 390 px on chat/analytics/dashboard; no JavaScript errors. The browser run found and fixed two frontend bugs: the chat client stopped for good during a server outage (it treated a network error as "session ended"), and the "All time" analytics period requested only the last 30 days. Limitation of this run: every test photo was a plain image with no detections, so damage-type/severity charts were exercised with real zero data in the browser (their counting is covered by the backend tests).
+- **Not verified in a browser yet:** chat on real phones, chat with a deactivated account mid-session (covered by backend tests), analytics with real detections, Phase 5 manual owner testing.
 - **Stage 4 browser verification (T12, 2026-11-14, scripted headless Chrome, each role in its own browser context, real AI service, `app_test`):** role home pages; empty and error states; review → accept (SMS) → assign → engineer attempt 1 with photo and note → feedback → reopen as attempt 2 (photo required again) → confirm (SMS) → citizen sees "repaired" and engineer history; severity override + filter; reject with required reason; delay → keep delayed (no SMS, citizen sees the new reason) → accept; reassignment (new attempt, old engineer locked out); no horizontal overflow at 390 px on six key pages. Stage 3 browser regression (sessions, two-tab refresh, maps, GPS cases, logout) also passed.
 - **Owner's manual browser test (reported 2026-11-15):** the full workflow passed — citizen report submission; admin review, acceptance and severity override; engineer assignment; engineer start, photos, notes and completion; admin "Needs more work"; engineer reopen and completion of repair attempt 2; admin final confirmation; status history Accepted → Completed with attempt 2 confirmed. Not reported as manually tested: reject, delay/keep delayed, reassignment, phone-width layout, real phone camera/GPS.
 - **Manual end-to-end verification (2026-11-14):** real AI service + API (against `app_test`) + the Wikimedia Commons photo `Potholes.jpg`: 1 `pothole` detection at confidence ≈ 0.689, estimated severity LOW; location MISMATCH vs a far location, VERIFIED (≈ 334 m) near the photo's own EXIF position; with the AI service stopped the report was saved as FAILED. Only the pothole class has been exercised.
@@ -778,7 +822,10 @@ Frontend (`frontend/.env`, optional): `VITE_API_BASE_URL` (empty in development;
 - [x] Reject and Delay require a reason; Accept takes an optional note (2026-11-14)
 - [ ] Proposed convention to confirm: feature branches
 - [ ] Frontend state management and testing tools; main backend testing tool (`node:test` currently in use — confirm); AI service testing tool (pytest in use — confirm)
-- [ ] WebSocket library and API documentation approach for the main backend (request validation: zod, adopted in Phase 2)
+- [x] WebSocket library — `ws` (2026-11-15)
+- [ ] API documentation approach for the main backend (request validation: zod, adopted in Phase 2)
+- [ ] Chat extras (unread counts, read receipts, attachments, typing) — not in scope; would need approval
+- [ ] Chat across several server processes (would need shared pub/sub such as Redis — out of scope for the FYP)
 - [x] How the main backend calls the AI service, and how it is protected — internal URL + shared secret header, §5 (2026-11-14)
 - [x] Which service computes severity — main backend (2026-11-14)
 - [x] Location storage — plain latitude/longitude columns (2026-11-14)

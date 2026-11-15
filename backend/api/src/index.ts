@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import { createApp } from "./app.js";
 import { EnvValidationError, loadEnvFile, parseEnv } from "./config/env.js";
 import { createPrismaClient, type PrismaClient } from "./db/prisma.js";
+import { attachChatGateway, type ChatGateway } from "./realtime/chatGateway.js";
 import { createDatabaseHealthCheck } from "./services/health.service.js";
 import { createHttpAiClient, unconfiguredAiClient } from "./services/ai/aiClient.js";
 import { createServices } from "./services/index.js";
@@ -51,6 +52,13 @@ async function main(): Promise<void> {
     },
   );
   const server = createServer(app);
+  // Admin–engineer chat WebSocket on the same server (same origin, same session cookie).
+  const chatGateway = attachChatGateway(server, {
+    tokens: services.tokens,
+    users: services.users,
+    chat: services.chat,
+    allowedOrigins: env.corsOrigins,
+  });
 
   try {
     await listen(server, env.port);
@@ -66,7 +74,7 @@ async function main(): Promise<void> {
   if (sms.providerName === "mock") {
     console.warn("SMS_PROVIDER=mock: SMS messages are NOT delivered; codes are printed to this console.");
   }
-  registerShutdownHandlers(server, prisma);
+  registerShutdownHandlers(server, prisma, chatGateway);
 }
 
 function listen(server: Server, port: number): Promise<void> {
@@ -79,7 +87,7 @@ function listen(server: Server, port: number): Promise<void> {
   });
 }
 
-function registerShutdownHandlers(server: Server, prisma: PrismaClient): void {
+function registerShutdownHandlers(server: Server, prisma: PrismaClient, chatGateway: ChatGateway): void {
   let shuttingDown = false;
 
   const shutdown = (signal: NodeJS.Signals): void => {
@@ -95,6 +103,8 @@ function registerShutdownHandlers(server: Server, prisma: PrismaClient): void {
     }, SHUTDOWN_TIMEOUT_MS);
     forceExit.unref();
 
+    // Chat sockets are long-lived; close them so they do not hold the shutdown open.
+    chatGateway.close();
     // Stop accepting connections, wait for in-flight requests, then close the database pool.
     server.close((closeError) => {
       prisma
