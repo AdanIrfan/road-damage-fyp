@@ -182,7 +182,7 @@ export interface AdminReport {
     createdAt: string;
   }[];
   repairAttempts: RepairAttempt[];
-  allowedActions: { review: boolean; decide: boolean; assign: boolean; feedback: boolean; confirmCompletion: boolean };
+  allowedActions: { review: boolean; decide: boolean; assign: boolean; feedback: boolean; confirmCompletion: boolean; retryAnalysis: boolean };
 }
 
 export interface AdminReportListItem {
@@ -194,7 +194,7 @@ export interface AdminReportListItem {
   citizen: PersonRef;
   severity: SeverityInfo;
   analysis: { status: AiAnalysisStatus; detectionCount: number; damageClasses: string[] };
-  location: { verificationStatus: LocationVerificationStatus; needsReview: boolean };
+  location: { verificationStatus: LocationVerificationStatus; needsReview: boolean; latitude: number; longitude: number };
   assignment: { engineer: PersonRef | null; repairStatus: RepairStatus | null; currentAttempt: number | null };
   image: ReportImage | null;
 }
@@ -267,6 +267,7 @@ export interface EngineerJobListItem {
   severity: SeverityLevel | null;
   damageClasses: string[];
   needsMoreWork: boolean;
+  location: { latitude: number; longitude: number };
   image: ReportImage | null;
 }
 
@@ -303,4 +304,18 @@ export interface AdminAnalytics {
     byStatus: { status: LocationVerificationStatus; reports: number; needsReview: number }[];
     needsReview: number;
   };
+  /** Hours from submission, from the status history; each report counts once per measure. */
+  turnaround: { toReview: TurnaroundStat; toDecision: TurnaroundStat; toCompletion: TurnaroundStat };
+}
+
+export interface TurnaroundStat {
+  reports: number;
+  medianHours: number | null;
+  averageHours: number | null;
+}
+
+/** Other reports near this one in place and time. A hint for admins; nothing is merged or rejected. */
+export interface PossibleDuplicates {
+  criteria: { radiusMeters: number; windowDays: number };
+  matches: (AdminReportListItem & { distanceMeters: number })[];
 }

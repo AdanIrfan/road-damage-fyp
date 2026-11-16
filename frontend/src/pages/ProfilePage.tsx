@@ -40,37 +40,37 @@ export function ProfilePage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-slate-900">{pageTitle[user.role]}</h1>
-        <p className="mt-1 text-sm text-slate-500">Your account details and password.</p>
+        <h1 className="text-2xl font-bold tracking-tight text-ink-900">{pageTitle[user.role]}</h1>
+        <p className="mt-1 text-sm text-ink-500">Your account details and password.</p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card title="Account">
           <dl className="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2">
             <div>
-              <dt className="text-slate-500">Role</dt>
+              <dt className="text-ink-500">Role</dt>
               <dd className="mt-1 font-medium">{roleLabel[user.role]}</dd>
             </div>
             <div>
-              <dt className="text-slate-500">Status</dt>
+              <dt className="text-ink-500">Status</dt>
               <dd className="mt-1">
                 <Badge tone={statusTone[user.status]}>{statusLabel[user.status]}</Badge>
               </dd>
             </div>
             <div>
-              <dt className="text-slate-500">Mobile number</dt>
+              <dt className="text-ink-500">Mobile number</dt>
               <dd className="mt-1 font-medium">{user.mobileNumber}</dd>
             </div>
             <div>
-              <dt className="text-slate-500">Mobile verified</dt>
+              <dt className="text-ink-500">Mobile verified</dt>
               <dd className="mt-1 font-medium">{user.mobileVerifiedAt === null ? "Not verified by SMS" : formatDate(user.mobileVerifiedAt)}</dd>
             </div>
             <div>
-              <dt className="text-slate-500">Member since</dt>
+              <dt className="text-ink-500">Member since</dt>
               <dd className="mt-1 font-medium">{formatDate(user.createdAt)}</dd>
             </div>
           </dl>
-          <form onSubmit={handleSave} className="mt-6 space-y-4 border-t border-slate-100 pt-5" noValidate>
+          <form onSubmit={handleSave} className="mt-6 space-y-4 border-t border-ink-100 pt-5" noValidate>
             {error !== undefined && <Alert>{error}</Alert>}
             {saved && <Alert tone="success">Profile updated.</Alert>}
             <TextField label="Full name" value={fullName} onChange={(e) => setFullName(e.target.value)} error={firstError(fieldErrors, "fullName")} required />

@@ -7,7 +7,7 @@
 // Phase 3 (citizen reporting): reports, report images, AI detections, report status history.
 // Stage 4 (admin & engineer workflows): assignments, repair attempts, repair updates, repair photos.
 // Phase 5 (admin-engineer chat): conversations, chat messages.
-// Models for later phases (notifications, ...) are NOT added yet.
+// Phase 6 (in-app notifications): notifications.
 
 generator client {
   provider     = "prisma-client"
@@ -72,6 +72,8 @@ model User {
   adminConversations    Conversation[] @relation("ConversationAdmin")
   engineerConversations Conversation[] @relation("ConversationEngineer")
   chatMessagesSent      ChatMessage[]
+
+  notifications Notification[]
 
   @@index([role, status])
   @@index([createdAt])
@@ -215,6 +217,7 @@ model Report {
   assignments      ReportAssignment[]
   repairUpdates    RepairUpdate[]
   repairPhotos     RepairPhoto[]
+  notifications    Notification[]
 
   @@index([citizenId, createdAt])
   @@index([status, createdAt])
@@ -390,9 +393,10 @@ model Conversation {
   lastMessageAt DateTime? @map("last_message_at") @db.Timestamptz(3)
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  admin    User          @relation("ConversationAdmin", fields: [adminId], references: [id], onDelete: Restrict)
-  engineer User          @relation("ConversationEngineer", fields: [engineerId], references: [id], onDelete: Restrict)
-  messages ChatMessage[]
+  admin         User           @relation("ConversationAdmin", fields: [adminId], references: [id], onDelete: Restrict)
+  engineer      User           @relation("ConversationEngineer", fields: [engineerId], references: [id], onDelete: Restrict)
+  messages      ChatMessage[]
+  notifications Notification[]
 
   @@unique([adminId, engineerId])
   @@index([engineerId])
@@ -416,4 +420,54 @@ model ChatMessage {
   @@unique([senderId, clientId])
   @@index([conversationId, createdAt, id])
   @@map("chat_messages")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6: persistent in-app notifications (one row per recipient).
+// ---------------------------------------------------------------------------
+
+enum NotificationType {
+  // Citizen
+  REPORT_SUBMITTED
+  REPORT_ACCEPTED
+  REPORT_REJECTED
+  REPORT_DELAYED
+  REPAIR_STARTED
+  REPAIR_UPDATED
+  REPAIR_CONFIRMED
+  // Admin
+  NEW_REPORT
+  AI_ANALYSIS_FAILED
+  REPAIR_AWAITING_CONFIRMATION
+  // Engineer
+  JOB_ASSIGNED
+  JOB_REASSIGNED
+  REWORK_REQUESTED
+  // Admin and engineer
+  CHAT_MESSAGE
+}
+
+model Notification {
+  id             String           @id @default(uuid()) @db.Uuid
+  /// Recipient. Only this user may read or update the row.
+  userId         String           @map("user_id") @db.Uuid
+  type           NotificationType
+  title          String           @db.VarChar(120)
+  body           String           @db.VarChar(500)
+  /// Where the notification leads (at most one of the two is set).
+  reportId       String?          @map("report_id") @db.Uuid
+  conversationId String?          @map("conversation_id") @db.Uuid
+  /// Identifies the event for this recipient, so a retried or concurrent request cannot create a second row.
+  dedupeKey      String           @map("dedupe_key") @db.VarChar(160)
+  readAt         DateTime?        @map("read_at") @db.Timestamptz(3)
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  report       Report?       @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+  @@map("notifications")
 }

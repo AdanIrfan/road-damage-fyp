@@ -55,7 +55,7 @@ export function setupTestDatabase(): TestDatabase {
     prisma,
     reset: async () => {
       await prisma.$executeRawUnsafe(
-        `TRUNCATE TABLE "${TEST_SCHEMA}"."chat_messages", "${TEST_SCHEMA}"."conversations", "${TEST_SCHEMA}"."repair_photos", "${TEST_SCHEMA}"."repair_updates", "${TEST_SCHEMA}"."report_assignments", ` +
+        `TRUNCATE TABLE "${TEST_SCHEMA}"."notifications", "${TEST_SCHEMA}"."chat_messages", "${TEST_SCHEMA}"."conversations", "${TEST_SCHEMA}"."repair_photos", "${TEST_SCHEMA}"."repair_updates", "${TEST_SCHEMA}"."report_assignments", ` +
           `"${TEST_SCHEMA}"."ai_detections", "${TEST_SCHEMA}"."report_images", "${TEST_SCHEMA}"."report_status_history", ` +
           `"${TEST_SCHEMA}"."reports", "${TEST_SCHEMA}"."refresh_tokens", "${TEST_SCHEMA}"."otp_codes", "${TEST_SCHEMA}"."users" CASCADE`,
       );

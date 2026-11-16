@@ -6,6 +6,8 @@ import { ChatSocketClient, type ConnectionStatus } from "../../lib/chatSocket";
 import { CHAT_MESSAGE_MAX_LENGTH, type ChatContact, type ChatMessage, type Conversation } from "../../lib/chatTypes";
 import { formatDate, roleLabel } from "../../utils/format";
 import { useCurrentUser } from "../auth/AuthContext";
+import { notificationsApi } from "../../lib/notificationsApi";
+import { useNotifications } from "../notifications/NotificationsContext";
 import { chatApi } from "./chatApi";
 
 /** One row in the contact list: an active contact and/or an existing conversation. */
@@ -191,6 +193,18 @@ export function ChatPage() {
     bottomRef.current?.scrollIntoView({ block: "end" });
   }, [threadMessageCount, threadPendingCount]);
 
+  // The conversation on screen is being read: clear its (single) chat notification, also when a
+  // new message arrives while it is open. Skipped while the tab is in the background.
+  const { setUnread } = useNotifications();
+  const openConversationId = thread?.conversationId;
+  useEffect(() => {
+    if (openConversationId === undefined || document.visibilityState !== "visible") return;
+    notificationsApi
+      .markConversationRead(openConversationId)
+      .then((result) => setUnread(result.unread))
+      .catch(() => undefined);
+  }, [openConversationId, threadMessageCount, setUnread]);
+
   async function loadEarlier() {
     if (thread === undefined || thread.messages.length === 0) return;
     setLoadingEarlier(true);
@@ -234,42 +248,42 @@ export function ChatPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Messages</h1>
-          <p className="mt-1 text-sm text-slate-500">Private conversations with {counterpart}. Only the two of you can see a conversation.</p>
+          <h1 className="text-2xl font-bold tracking-tight text-ink-900">Messages</h1>
+          <p className="mt-1 text-sm text-ink-500">Private conversations with {counterpart}. Only the two of you can see a conversation.</p>
         </div>
-        <span className="flex items-center gap-2 text-sm text-slate-500" role="status">
-          <span className={`size-2 rounded-full ${status === "open" ? "bg-green-500" : status === "stopped" ? "bg-red-500" : "bg-amber-500"}`} aria-hidden="true" />
+        <span className="flex items-center gap-2 text-sm text-ink-500" role="status">
+          <span className={`size-2 rounded-full ${status === "open" ? "bg-sev-low" : status === "stopped" ? "bg-danger-700" : "bg-sev-medium"}`} aria-hidden="true" />
           {STATUS_TEXT[status]}
         </span>
       </div>
       {statusReason !== undefined && <Alert>{statusReason}</Alert>}
       {listError !== undefined && <Alert>{listError}</Alert>}
 
-      <div className="grid gap-4 md:grid-cols-[18rem_1fr]">
+      <div className="grid gap-4 md:grid-cols-[19rem_1fr]">
         {/* Contact list (hidden on small screens while a conversation is open) */}
-        <aside className={`rounded-lg border border-slate-200 bg-white shadow-sm ${selectedContactId !== null ? "hidden md:block" : ""}`}>
-          <h2 className="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-slate-900">{me.role === "ADMIN" ? "Engineers" : "Administrators"}</h2>
+        <aside className={`rounded-xl border border-ink-150 bg-white ${selectedContactId !== null ? "hidden md:block" : ""}`}>
+          <h2 className="border-b border-ink-100 px-4 py-3 text-sm font-semibold text-ink-900">{me.role === "ADMIN" ? "Engineers" : "Administrators"}</h2>
           {listLoading ? (
-            <div className="flex justify-center py-8 text-blue-600">
+            <div className="flex justify-center py-8 text-cobalt-600">
               <Spinner />
             </div>
           ) : entries.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-slate-500">No active {counterpart} to message yet.</p>
+            <p className="px-4 py-6 text-sm text-ink-500">No active {counterpart} to message yet.</p>
           ) : (
-            <ul className="max-h-[60vh] divide-y divide-slate-100 overflow-y-auto">
+            <ul className="max-h-[60vh] divide-y divide-ink-100 overflow-y-auto">
               {entries.map(({ contact, conversation }) => (
                 <li key={contact.id}>
                   <button
                     type="button"
                     onClick={() => select(contact.id)}
                     aria-current={contact.id === selectedContactId ? "true" : undefined}
-                    className={`block w-full px-4 py-3 text-left transition hover:bg-slate-50 ${contact.id === selectedContactId ? "bg-blue-50" : ""}`}
+                    className={`block w-full px-4 py-3 text-left transition hover:bg-canvas ${contact.id === selectedContactId ? "bg-cobalt-50" : ""}`}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-sm font-medium text-slate-900">{contact.fullName}</span>
+                      <span className="truncate text-sm font-semibold text-ink-900">{contact.fullName}</span>
                       {contact.status !== "ACTIVE" && <Badge tone="red">Deactivated</Badge>}
                     </div>
-                    <p className="mt-0.5 truncate text-xs text-slate-500">
+                    <p className="mt-0.5 truncate text-xs text-ink-500">
                       {conversation?.lastMessage
                         ? `${conversation.lastMessage.senderId === me.id ? "You: " : ""}${conversation.lastMessage.body}`
                         : "No messages yet"}
@@ -282,24 +296,24 @@ export function ChatPage() {
         </aside>
 
         {/* Conversation */}
-        <section className={`flex min-h-[60vh] flex-col rounded-lg border border-slate-200 bg-white shadow-sm ${selectedContactId === null ? "hidden md:flex" : ""}`}>
+        <section className={`flex min-h-[60vh] flex-col rounded-xl border border-ink-150 bg-white ${selectedContactId === null ? "hidden md:flex" : ""}`}>
           {selectedContactId === null ? (
-            <div className="flex flex-1 items-center justify-center p-6 text-sm text-slate-500">Choose someone to start or continue a conversation.</div>
+            <div className="flex flex-1 items-center justify-center p-6 text-sm text-ink-500">Choose someone to start or continue a conversation.</div>
           ) : (
             <>
-              <header className="flex items-center gap-3 border-b border-slate-100 px-4 py-3">
-                <button type="button" className="rounded-md px-2 py-1 text-sm text-blue-700 hover:bg-blue-50 md:hidden" onClick={() => select(null)}>
-                  ← Back
+              <header className="flex items-center gap-3 border-b border-ink-100 px-4 py-3">
+                <button type="button" className="rounded-lg px-2 py-1 text-sm text-cobalt-700 hover:bg-cobalt-50 md:hidden" onClick={() => select(null)}>
+                  Back
                 </button>
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-slate-900">{selected?.contact.fullName ?? "Conversation"}</div>
-                  {selected !== undefined && <div className="text-xs text-slate-500">{roleLabel[selected.contact.role]}</div>}
+                  <div className="truncate text-sm font-semibold text-ink-900">{selected?.contact.fullName ?? "Conversation"}</div>
+                  {selected !== undefined && <div className="text-xs text-ink-500">{roleLabel[selected.contact.role]}</div>}
                 </div>
               </header>
 
               <div className="max-h-[60vh] flex-1 space-y-3 overflow-y-auto px-4 py-4" aria-live="polite">
                 {threadLoading && (
-                  <div className="flex justify-center py-8 text-blue-600">
+                  <div className="flex justify-center py-8 text-cobalt-600">
                     <Spinner />
                   </div>
                 )}
@@ -312,7 +326,7 @@ export function ChatPage() {
                   </div>
                 )}
                 {thread !== undefined && !threadLoading && thread.messages.length === 0 && threadPending.length === 0 && (
-                  <p className="py-8 text-center text-sm text-slate-500">No messages yet. Say hello.</p>
+                  <p className="py-8 text-center text-sm text-ink-500">No messages yet. Say hello.</p>
                 )}
                 {thread?.messages.map((message) => (
                   <MessageBubble key={message.id} mine={message.senderId === me.id} body={message.body} meta={formatDate(message.createdAt)} />
@@ -330,9 +344,9 @@ export function ChatPage() {
                 <div ref={bottomRef} />
               </div>
 
-              <form onSubmit={submit} className="border-t border-slate-100 p-3">
+              <form onSubmit={submit} className="border-t border-ink-100 p-3">
                 {selected !== undefined && selected.contact.status !== "ACTIVE" ? (
-                  <p className="text-sm text-slate-500">This account is deactivated. You can read the history but not send new messages.</p>
+                  <p className="text-sm text-ink-500">This account is deactivated. You can read the history but not send new messages.</p>
                 ) : (
                   <div className="flex items-end gap-2">
                     <div className="flex-1">
@@ -348,9 +362,9 @@ export function ChatPage() {
                         onKeyDown={onKeyDown}
                         disabled={!canSend || thread === undefined}
                         placeholder="Write a message… (Enter to send, Shift+Enter for a new line)"
-                        className="block w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm outline-none placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 disabled:bg-slate-100"
+                        className="block w-full resize-y rounded-lg border border-ink-300 bg-white px-3 py-2 text-sm outline-none placeholder:text-ink-500 focus:border-cobalt-600 focus:ring-2 focus:ring-cobalt-100 disabled:bg-ink-100"
                       />
-                      <div className="mt-1 text-right text-xs text-slate-400">
+                      <div className="mt-1 text-right text-xs text-ink-500">
                         {draft.length}/{CHAT_MESSAGE_MAX_LENGTH}
                       </div>
                     </div>
@@ -375,12 +389,12 @@ function MessageBubble({ mine, body, meta, failed = false, onRetry }: { mine: bo
         {/* Plain text only: React escapes it; never rendered as HTML. */}
         <div
           className={`whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-sm ${
-            mine ? (failed ? "bg-red-50 text-red-900 ring-1 ring-red-200" : "bg-blue-600 text-white") : "bg-slate-100 text-slate-900"
+            mine ? (failed ? "bg-danger-50 text-danger-700 ring-1 ring-danger-200" : "bg-ink-900 text-white") : "bg-ink-100 text-ink-900"
           }`}
         >
           {body}
         </div>
-        <div className={`mt-1 flex items-center gap-2 text-xs ${mine ? "justify-end" : ""} ${failed ? "text-red-600" : "text-slate-400"}`}>
+        <div className={`mt-1 flex items-center gap-2 text-xs ${mine ? "justify-end" : ""} ${failed ? "text-danger-700" : "text-ink-500"}`}>
           <span>{meta}</span>
           {onRetry !== undefined && (
             <button type="button" className="font-medium underline" onClick={onRetry}>

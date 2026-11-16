@@ -63,8 +63,8 @@ export function EngineersPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Maintenance engineers</h1>
-          <p className="mt-1 text-sm text-slate-500">Create engineer accounts and manage their access.</p>
+          <h1 className="text-2xl font-bold tracking-tight text-ink-900">Maintenance engineers</h1>
+          <p className="mt-1 text-sm text-ink-500">Create engineer accounts and manage their access.</p>
         </div>
         {!showCreate && <Button onClick={() => setShowCreate(true)}>Add engineer</Button>}
       </div>
@@ -94,7 +94,7 @@ export function EngineersPage() {
               placeholder="Search by name or mobile number"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
-              className="block w-full min-w-0 rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="block w-full min-w-0 rounded-lg border border-ink-300 px-3 py-2 text-sm outline-none focus:border-cobalt-600 focus:ring-2 focus:ring-cobalt-100"
             />
             <Button type="submit" variant="secondary">
               Search
@@ -110,7 +110,7 @@ export function EngineersPage() {
                 return value === "ACTIVE" || value === "DEACTIVATED" ? { ...rest, page: 1, status: value } : { ...rest, page: 1 };
               });
             }}
-            className="rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            className="rounded-lg border border-ink-300 px-3 py-2 text-sm outline-none focus:border-cobalt-600 focus:ring-2 focus:ring-cobalt-100"
           >
             <option value="">All statuses</option>
             <option value="ACTIVE">Active</option>
@@ -120,17 +120,17 @@ export function EngineersPage() {
 
         <div className="mt-4 overflow-x-auto">
           {loading && result === undefined ? (
-            <div className="flex justify-center py-10 text-blue-600">
+            <div className="flex justify-center py-10 text-cobalt-600">
               <Spinner />
             </div>
           ) : result !== undefined && result.items.length === 0 ? (
-            <p className="py-10 text-center text-sm text-slate-500">
+            <p className="py-10 text-center text-sm text-ink-500">
               {query.search !== undefined && query.search !== "" ? "No engineers match your search." : "No engineer accounts yet."}
             </p>
           ) : (
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
+            <table className="min-w-full divide-y divide-ink-150 text-sm">
               <thead>
-                <tr className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <tr className="text-left text-xs font-semibold tracking-wider uppercase text-ink-500">
                   <th className="py-2 pr-4">Name</th>
                   <th className="py-2 pr-4">Mobile number</th>
                   <th className="py-2 pr-4">Status</th>
@@ -139,26 +139,26 @@ export function EngineersPage() {
                   <th className="py-2 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-ink-100">
                 {result?.items.map((engineer) => (
                   <tr key={engineer.id} className={loading ? "opacity-60" : undefined}>
-                    <td className="py-3 pr-4 font-medium text-slate-900">
-                      <Link to={`/admin/engineers/${engineer.id}`} className="hover:text-blue-700 hover:underline">
+                    <td className="py-3 pr-4 font-medium text-ink-900">
+                      <Link to={`/admin/engineers/${engineer.id}`} className="hover:text-cobalt-700 hover:underline">
                         {engineer.fullName}
                       </Link>
-                      {engineer.mustChangePassword && <div className="text-xs font-normal text-amber-700">Temporary password not changed yet</div>}
+                      {engineer.mustChangePassword && <div className="text-xs font-normal text-warning-800">Temporary password not changed yet</div>}
                     </td>
-                    <td className="py-3 pr-4 text-slate-600">{engineer.mobileNumber}</td>
+                    <td className="py-3 pr-4 text-ink-600">{engineer.mobileNumber}</td>
                     <td className="py-3 pr-4">
                       <Badge tone={statusTone[engineer.status]}>{statusLabel[engineer.status]}</Badge>
                     </td>
-                    <td className="py-3 pr-4 text-slate-700">
+                    <td className="py-3 pr-4 text-ink-600">
                       {engineer.workload.openJobs}
                       {engineer.workload.awaitingConfirmation > 0 && (
-                        <span className="block text-xs text-slate-500">{engineer.workload.awaitingConfirmation} awaiting confirmation</span>
+                        <span className="block text-xs text-ink-500">{engineer.workload.awaitingConfirmation} awaiting confirmation</span>
                       )}
                     </td>
-                    <td className="hidden py-3 pr-4 text-slate-500 md:table-cell">{formatDate(engineer.createdAt)}</td>
+                    <td className="hidden py-3 pr-4 text-ink-500 md:table-cell">{formatDate(engineer.createdAt)}</td>
                     <td className="py-3 text-right">
                       <Button
                         variant={engineer.status === "ACTIVE" ? "secondary" : "primary"}

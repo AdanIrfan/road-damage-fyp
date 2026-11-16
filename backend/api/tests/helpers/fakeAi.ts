@@ -1,4 +1,4 @@
-import type { AiAnalysis, AiClient, AiDetectionResult } from "../../src/services/ai/aiClient.js";
+import type { AiAnalysis, AiClient, AiDetectionResult, AiHealth } from "../../src/services/ai/aiClient.js";
 
 export const MODEL_CLASSES = ["longitudinal_crack", "transverse_crack", "alligator_crack", "pothole"];
 
@@ -30,7 +30,15 @@ export class FakeAiClient implements AiClient {
     };
   }
 
+  /** What health() answers. */
+  healthStatus: AiHealth = { status: "online", modelLoaded: true };
+
+  health(): Promise<AiHealth> {
+    return Promise.resolve(this.healthStatus);
+  }
+
   reset(): void {
+    this.healthStatus = { status: "online", modelLoaded: true };
     this.calls.length = 0;
     this.detections = [];
     this.failWith = undefined;

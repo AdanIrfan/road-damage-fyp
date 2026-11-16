@@ -1,29 +1,31 @@
+import { ChevronLeft, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
 import { ReasonDialog } from "../../components/Dialog";
-import { Alert, Badge, Button, Card, Spinner } from "../../components/ui";
+import { RepairPill, ReportRef, SeverityIndicator, StatusPill } from "../../components/reports/indicators";
 import {
   captureMethodLabel,
   damageClassLabel,
+  formatAge,
   formatConfidence,
   formatDistance,
   locationStatusHelp,
   locationStatusLabel,
-  repairStatusLabel,
-  repairStatusTone,
-  reportStatusLabel,
-  reportStatusTone,
+  reportTitle,
   severityLabel,
-  severityTone,
 } from "../../components/reports/labels";
 import { LocationMap } from "../../components/reports/LocationMap";
+import { ProgressStepper } from "../../components/reports/ProgressStepper";
 import { RepairAttempts } from "../../components/reports/RepairAttempts";
-import { ReportPhoto } from "../../components/reports/ReportPhoto";
-import { SeverityNote } from "../../components/reports/SeverityNote";
+import { detectionColor, ReportPhoto } from "../../components/reports/ReportPhoto";
+import { SeverityExplanation } from "../../components/reports/SeverityExplanation";
 import { StatusTimeline } from "../../components/reports/StatusTimeline";
+import { useToast } from "../../components/Toast";
+import { Alert, Avatar, Badge, Button, buttonClass, Card, Skeleton, Spinner } from "../../components/ui";
 import { ApiError, errorMessage } from "../../lib/api";
-import type { AdminActionResult, AdminReport, SeverityLevel } from "../../lib/reportTypes";
+import type { AdminActionResult, AdminReport, PossibleDuplicates, SeverityLevel } from "../../lib/reportTypes";
 import { formatDate } from "../../utils/format";
+import { useNotifications } from "../notifications/NotificationsContext";
 import { adminReportsApi } from "./adminReportsApi";
 import { AssignEngineerDialog } from "./AssignEngineerDialog";
 
@@ -37,6 +39,8 @@ export function AdminReportDetailPage() {
   const [conflict, setConflict] = useState(false);
   const [dialog, setDialog] = useState<DialogKind>();
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
+  const { refresh: refreshNotifications } = useNotifications();
 
   const load = useCallback(async () => {
     setLoadError(undefined);
@@ -53,15 +57,61 @@ export function AdminReportDetailPage() {
     void load();
   }, [load]);
 
+  // Possible duplicates are a hint only. If the lookup fails the page works without it.
+  const [duplicates, setDuplicates] = useState<PossibleDuplicates>();
+  useEffect(() => {
+    let cancelled = false;
+    setDuplicates(undefined);
+    adminReportsApi
+      .possibleDuplicates(id)
+      .then((result) => {
+        if (!cancelled) setDuplicates(result);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  const [retrying, setRetrying] = useState(false);
+  async function retryAnalysis() {
+    if (report === undefined) return;
+    setRetrying(true);
+    setNotice(undefined);
+    try {
+      const result = await adminReportsApi.retryAnalysis(report.id);
+      setReport(result.report);
+      setConflict(false);
+      if (result.analysis === "completed") {
+        const found = result.report.analysis.detections.length;
+        toast.success(found === 0 ? "Analysis completed. No damage was detected automatically." : `Analysis completed. ${found} detection${found === 1 ? "" : "s"} found.`);
+      } else {
+        setNotice({ tone: "error", text: "The automatic analysis failed again. The report is unchanged; you can try again later or review the photo manually." });
+      }
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "ANALYSIS_NOT_RETRYABLE") {
+        // Someone else already re-ran it: show the current state.
+        void load();
+      } else {
+        setNotice({ tone: "error", text: errorMessage(err) });
+      }
+    } finally {
+      setRetrying(false);
+    }
+  }
+
   /** Applies an action result; a 409 means the report changed (another admin, the engineer…). */
   function applyResult(result: AdminActionResult, message: string) {
     setReport(result.report);
     setDialog(undefined);
     setConflict(false);
+    // The action may have created or cleared notifications for this admin.
+    refreshNotifications();
     if (result.notification === "failed") {
       setNotice({ tone: "error", text: `${message} The SMS to the citizen could not be sent; the decision is saved.` });
     } else {
-      setNotice({ tone: "success", text: result.notification === "sent" ? `${message} The citizen has been notified by SMS.` : message });
+      setNotice(undefined);
+      toast.success(result.notification === "sent" ? `${message} The citizen has been notified by SMS.` : message);
     }
   }
 
@@ -95,42 +145,101 @@ export function AdminReportDetailPage() {
   if (loadError !== undefined) {
     return (
       <div className="space-y-4">
-        <BackLink />
+        <Link to="/admin/reports" className="text-sm font-semibold text-cobalt-600 hover:text-cobalt-700">
+          Back to reports
+        </Link>
         <Alert>{loadError}</Alert>
       </div>
     );
   }
   if (report === undefined) {
     return (
-      <div className="flex justify-center py-16 text-blue-600">
-        <Spinner />
+      <div className="space-y-5" role="status">
+        <span className="sr-only">Loading report</span>
+        <Skeleton className="h-20 w-full rounded-xl" />
+        <Skeleton className="h-16 w-full rounded-xl" />
+        <Skeleton className="h-96 w-full rounded-xl" />
       </div>
     );
   }
 
   const actions = report.allowedActions;
   const attempt = report.assignment.currentAttempt;
+  const title = reportTitle(
+    report.analysis.detections.map((d) => d.className).filter((name, index, all) => all.indexOf(name) === index),
+    report.analysis.status,
+  );
+  const noActions = !actions.review && !actions.decide && !actions.assign && !actions.confirmCompletion;
 
   return (
-    <div className="space-y-6">
-      <BackLink />
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Road damage report</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            {captureMethodLabel[report.captureMethod]} · submitted {formatDate(report.createdAt)} by {report.citizen.fullName}
-          </p>
+    <div className="space-y-5">
+      {/*
+        Sticky header: the report's identity and every workflow action stay in view while the
+        admin scrolls through the evidence. It sits directly under the app's top bar.
+      */}
+      <header className="sticky top-16 z-10 -mx-4 border-b border-ink-150 bg-white px-4 py-3 shadow-[0_2px_8px_rgba(14,26,43,0.06)] sm:-mx-6 sm:px-6 lg:top-14 lg:-mx-8 lg:px-8">
+        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1 text-[13px] text-ink-500">
+              <Link to="/admin/reports" className="inline-flex items-center gap-0.5 font-semibold text-cobalt-600 hover:text-cobalt-700">
+                <ChevronLeft className="size-4" aria-hidden="true" />
+                Reports
+              </Link>
+              <span aria-hidden="true">/</span>
+              <ReportRef id={report.id} className="text-ink-900" />
+            </div>
+            <div className="mt-1 flex flex-wrap items-center gap-2.5">
+              <h1 className="text-xl font-bold tracking-tight text-ink-900 sm:text-2xl">{title}</h1>
+              <StatusPill status={report.status} />
+              {report.assignment.repairStatus !== null && <RepairPill status={report.assignment.repairStatus} attempt={attempt} />}
+            </div>
+            <p className="mt-0.5 text-[13px] text-ink-500">
+              {captureMethodLabel[report.captureMethod]} · submitted {formatDate(report.createdAt)}
+              {report.status !== "COMPLETED" && report.status !== "REJECTED" && ` · open for ${formatAge(report.createdAt)}`}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {actions.review && (
+              <Button size="lg" loading={busy} onClick={() => runDirect(() => adminReportsApi.review(report.id), "The report is now under review.")}>
+                Start review
+              </Button>
+            )}
+            {actions.decide && (
+              <>
+                <button type="button" onClick={() => setDialog("reject")} className={buttonClass("secondary", "lg", "text-danger-700! ring-danger-200!")}>
+                  Reject
+                </button>
+                <Button size="lg" variant="secondary" onClick={() => setDialog("delay")}>
+                  {report.status === "DELAYED" ? "Keep delayed" : "Delay"}
+                </Button>
+                <Button size="lg" onClick={() => setDialog("accept")}>
+                  Accept report
+                </Button>
+              </>
+            )}
+            {actions.feedback && (
+              <Button size="lg" variant="secondary" onClick={() => setDialog("feedback")}>
+                Needs more work
+              </Button>
+            )}
+            {actions.assign && (
+              <Button size="lg" variant={report.assignment.engineer === null ? "primary" : "secondary"} onClick={() => setDialog("assign")}>
+                {report.assignment.engineer === null ? "Assign engineer" : "Reassign"}
+              </Button>
+            )}
+            {actions.confirmCompletion && (
+              <Button size="lg" onClick={() => setDialog("confirm")}>
+                Confirm repair completed
+              </Button>
+            )}
+            {noActions && (
+              <p className="text-[13px] text-ink-500">
+                {report.status === "COMPLETED" ? "This report is completed." : report.status === "REJECTED" ? "This report was rejected." : "No actions are available right now."}
+              </p>
+            )}
+          </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Badge tone={reportStatusTone[report.status]}>{reportStatusLabel[report.status]}</Badge>
-          {report.assignment.repairStatus !== null && (
-            <Badge tone={repairStatusTone[report.assignment.repairStatus]}>
-              Repair: {repairStatusLabel[report.assignment.repairStatus]}
-              {attempt !== null && attempt > 1 ? ` · attempt ${attempt}` : ""}
-            </Badge>
-          )}
-        </div>
-      </div>
+      </header>
 
       {conflict && (
         <Alert>
@@ -141,61 +250,92 @@ export function AdminReportDetailPage() {
         </Alert>
       )}
       {notice !== undefined && <Alert tone={notice.tone}>{notice.text}</Alert>}
+      {actions.confirmCompletion && (
+        <Alert tone="info">The engineer marked attempt {attempt} as completed. Check its photos under Repair work, then confirm, or ask for more work.</Alert>
+      )}
+      {report.assignment.engineer?.status === "DEACTIVATED" && <Alert>The assigned engineer's account is deactivated. Reassign this report.</Alert>}
 
-      <Card title="Actions">
-        <div className="flex flex-wrap gap-2">
-          {actions.review && (
-            <Button loading={busy} onClick={() => runDirect(() => adminReportsApi.review(report.id), "The report is now under review.")}>
-              Start review
-            </Button>
-          )}
-          {actions.decide && (
-            <>
-              <Button onClick={() => setDialog("accept")}>Accept</Button>
-              <Button variant="danger" onClick={() => setDialog("reject")}>
-                Reject
-              </Button>
-              <Button variant="secondary" onClick={() => setDialog("delay")}>
-                {report.status === "DELAYED" ? "Keep delayed" : "Delay"}
-              </Button>
-            </>
-          )}
-          {actions.assign && (
-            <Button variant={report.assignment.engineer === null ? "primary" : "secondary"} onClick={() => setDialog("assign")}>
-              {report.assignment.engineer === null ? "Assign engineer" : "Reassign"}
-            </Button>
-          )}
-          {actions.confirmCompletion && <Button onClick={() => setDialog("confirm")}>Confirm repair completed</Button>}
-          {actions.feedback && (
-            <Button variant="secondary" onClick={() => setDialog("feedback")}>
-              Needs more work
-            </Button>
-          )}
-          {!actions.review && !actions.decide && !actions.assign && !actions.confirmCompletion && (
-            <p className="text-sm text-slate-500">
-              {report.status === "COMPLETED"
-                ? "This report is completed."
-                : report.status === "REJECTED"
-                  ? "This report was rejected."
-                  : "No actions are available right now."}
-            </p>
-          )}
-        </div>
-        {actions.confirmCompletion && (
-          <p className="mt-3 text-sm text-slate-600">
-            The engineer marked attempt {attempt} as completed. Check its photos below, then confirm, or ask for more work.
+      {duplicates !== undefined && duplicates.matches.length > 0 && (
+        <section role="note" className="rounded-xl border border-ink-150 bg-white px-5 py-4 shadow-[inset_0_3px_0_var(--color-road-400)]">
+          <h2 className="text-sm font-bold text-ink-900">
+            Possible duplicate{duplicates.matches.length === 1 ? "" : "s"}: {duplicates.matches.length} other report{duplicates.matches.length === 1 ? "" : "s"} nearby
+          </h2>
+          <p className="mt-0.5 text-[13px] text-ink-500">
+            Within {duplicates.criteria.radiusMeters} m of this location and submitted within {duplicates.criteria.windowDays} days of it. This is a hint
+            for your decision only: nothing is merged or rejected automatically.
           </p>
-        )}
-        {report.assignment.engineer?.status === "DEACTIVATED" && (
-          <Alert>The assigned engineer's account is deactivated. Reassign this report.</Alert>
-        )}
-      </Card>
+          <ul className="mt-2 divide-y divide-ink-100">
+            {duplicates.matches.map((match) => (
+              <li key={match.id}>
+                <Link to={`/admin/reports/${match.id}`} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2 text-[13px] text-ink-900 hover:bg-canvas">
+                  <ReportRef id={match.id} className="text-ink-900" />
+                  <span className="font-semibold">{reportTitle(match.analysis.damageClasses, match.analysis.status)}</span>
+                  <StatusPill status={match.status} />
+                  <span className="font-mono text-ink-600">{formatDistance(match.distanceMeters)} away</span>
+                  <span className="text-ink-500">{formatDate(match.createdAt)}</span>
+                  <span className="ml-auto font-semibold text-cobalt-600">Open</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
-      <div className="grid gap-6 lg:grid-cols-5">
-        <div className="space-y-6 lg:col-span-3">
-          <Card title="Photo">
-            {report.image === null ? <p className="text-sm text-slate-500">No photo.</p> : <ReportPhoto image={report.image} detections={report.analysis.detections} />}
-            {report.description !== null && <p className="mt-4 whitespace-pre-line text-sm text-slate-700">{report.description}</p>}
+      <section className="rounded-xl border border-ink-150 bg-white px-5 py-4">
+        <ProgressStepper
+          status={report.status}
+          repairActive={report.assignment.engineer !== null}
+          notes={{
+            0: formatDate(report.createdAt),
+            3: report.assignment.engineer === null ? "Assign an engineer" : `${report.assignment.engineer.fullName}${attempt !== null ? ` · attempt ${attempt}` : ""}`,
+            4: "After you confirm the repair",
+          }}
+        />
+      </section>
+
+      <div className="grid gap-5 lg:grid-cols-5">
+        <div className="space-y-5 lg:col-span-3">
+          <Card title="Evidence and detections">
+            {report.image === null ? <p className="text-sm text-ink-500">No photo.</p> : <ReportPhoto image={report.image} detections={report.analysis.detections} />}
+            {report.analysis.status === "FAILED" ? (
+              <div className="mt-4 space-y-3">
+                <Alert tone="info">
+                  The automatic analysis failed ({report.analysis.errorCode ?? "unknown reason"}). Review the photo manually, or run the analysis again.
+                </Alert>
+                {actions.retryAnalysis && (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Button variant="secondary" loading={retrying} onClick={() => void retryAnalysis()}>
+                      <RefreshCw className="size-4" aria-hidden="true" />
+                      {retrying ? "Analysing the photo…" : "Retry analysis"}
+                    </Button>
+                    <span className="text-xs text-ink-500">Only the automatic results are updated. The status and your severity correction are not changed.</span>
+                  </div>
+                )}
+              </div>
+            ) : report.analysis.detections.length === 0 ? (
+              <p className="mt-4 text-sm text-ink-600">No damage was detected automatically.</p>
+            ) : (
+              <ul className="mt-4 divide-y divide-ink-100 text-sm">
+                {report.analysis.detections.map((d) => (
+                  <li key={d.id} className="flex items-center gap-3 py-2">
+                    <span className="flex flex-1 items-center gap-2 font-semibold text-ink-900">
+                      <span className="size-3 shrink-0 border-[3px] border-ink-900" style={{ backgroundColor: detectionColor(d.className) }} aria-hidden="true" />
+                      {damageClassLabel(d.className)}
+                    </span>
+                    <span className="h-1.5 w-24 overflow-hidden rounded-full bg-ink-150" aria-hidden="true">
+                      <span className="block h-full bg-ink-900" style={{ width: `${d.confidence * 100}%` }} />
+                    </span>
+                    <span className="w-28 text-right font-mono text-[13px] text-ink-600">{formatConfidence(d.confidence)} confidence</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {report.description !== null && (
+              <p className="mt-4 rounded-lg bg-canvas px-3 py-2.5 text-sm whitespace-pre-line text-ink-600">
+                <span className="font-semibold text-ink-900">Citizen's description: </span>
+                {report.description}
+              </p>
+            )}
           </Card>
           <Card title="Repair work" description="Grouped by attempt. Earlier attempts are kept as evidence.">
             <RepairAttempts attempts={report.repairAttempts} />
@@ -205,71 +345,86 @@ export function AdminReportDetailPage() {
           </Card>
         </div>
 
-        <div className="space-y-6 lg:col-span-2">
+        <div className="space-y-5 lg:col-span-2">
           <SeverityCard report={report} onSave={(severity) => run(() => adminReportsApi.setSeverity(report.id, severity), "Severity updated.")} />
-          <Card title="Automatic analysis">
-            {report.analysis.status === "FAILED" ? (
-              <Alert tone="info">The automatic analysis failed ({report.analysis.errorCode ?? "unknown reason"}). Review the photo manually.</Alert>
-            ) : report.analysis.detections.length === 0 ? (
-              <p className="text-sm text-slate-600">No damage was detected automatically.</p>
-            ) : (
-              <ul className="divide-y divide-slate-100 text-sm">
-                {report.analysis.detections.map((d) => (
-                  <li key={d.id} className="flex justify-between py-1.5">
-                    <span>{damageClassLabel(d.className)}</span>
-                    <span className="text-slate-500">confidence {formatConfidence(d.confidence)}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-          <Card title="Location">
+          <Card
+            title="Location"
+            flush
+            actions={<Badge tone={report.location.needsReview ? "amber" : "green"}>{locationStatusLabel[report.location.verificationStatus]}</Badge>}
+          >
             <LocationMap
               value={{ latitude: report.location.latitude, longitude: report.location.longitude }}
               accuracyMeters={report.location.gpsAccuracyMeters}
               comparison={report.location.exif === null ? null : { ...report.location.exif, label: "Location stored in the photo (EXIF)" }}
-              className="h-64"
+              className="h-64 rounded-none! border-x-0!"
             />
-            <div className="mt-3 space-y-1 text-sm">
-              <Badge tone={report.location.needsReview ? "amber" : "green"}>{locationStatusLabel[report.location.verificationStatus]}</Badge>
-              <p className="text-slate-600">{locationStatusHelp[report.location.verificationStatus]}</p>
+            <div className="space-y-2 px-5 py-4 text-[13px]">
+              <div className="flex items-center gap-2">
+                <span className="size-3 rounded-full bg-cobalt-600" aria-hidden="true" />
+                <span className="text-ink-600">{report.captureMethod === "LIVE_CAMERA" ? "Device GPS (marker)" : "Selected by the citizen (marker)"}</span>
+                <span className="ml-auto font-mono text-ink-600">
+                  {report.location.latitude.toFixed(5)}, {report.location.longitude.toFixed(5)}
+                </span>
+              </div>
               {report.location.exif !== null && (
-                <p className="text-slate-500">
-                  Red point: location stored in the photo
-                  {report.location.exif.distanceMeters !== null && ` (${formatDistance(report.location.exif.distanceMeters)} away)`}.
-                </p>
+                <div className="flex items-center gap-2">
+                  <span className="size-3 rounded-full border-2 border-danger-700 bg-danger-200" aria-hidden="true" />
+                  <span className="text-ink-600">
+                    Stored in the photo (EXIF){report.location.exif.distanceMeters !== null && ` · ${formatDistance(report.location.exif.distanceMeters)} away`}
+                  </span>
+                  <span className="ml-auto font-mono text-ink-600">
+                    {report.location.exif.latitude.toFixed(5)}, {report.location.exif.longitude.toFixed(5)}
+                  </span>
+                </div>
               )}
-              {report.location.gpsAccuracyMeters !== null && <p className="text-slate-500">GPS accuracy: about {Math.round(report.location.gpsAccuracyMeters)} m</p>}
+              {report.location.gpsAccuracyMeters !== null && <p className="text-ink-500">GPS accuracy: about {Math.round(report.location.gpsAccuracyMeters)} m</p>}
+              <p className="text-ink-500">{locationStatusHelp[report.location.verificationStatus]}</p>
+              <p className="text-xs text-ink-500">Location findings only flag a report for your check; nothing is rejected automatically.</p>
             </div>
           </Card>
-          <Card title="Citizen">
-            <p className="text-sm text-slate-800">{report.citizen.fullName}</p>
-            <p className="text-sm text-slate-500">{report.citizen.mobileNumber}</p>
-          </Card>
-          <Card title="Assignment">
-            {report.assignment.engineer === null ? (
-              <p className="text-sm text-slate-500">Not assigned.</p>
-            ) : (
-              <div className="text-sm">
-                <Link to={`/admin/engineers/${report.assignment.engineer.id}`} className="font-medium text-blue-700 hover:underline">
-                  {report.assignment.engineer.fullName}
-                </Link>
-                <p className="text-slate-500">
-                  Assigned {formatDate(report.assignment.assignedAt)} · attempt {attempt}
-                </p>
+          <section className="space-y-4 rounded-xl border border-ink-150 bg-white p-5">
+            <div className="flex items-center gap-3">
+              <Avatar name={report.citizen.fullName} />
+              <div className="min-w-0">
+                <div className="text-xs text-ink-500">Citizen</div>
+                <div className="font-semibold text-ink-900">{report.citizen.fullName}</div>
+                <div className="font-mono text-xs text-ink-600">{report.citizen.mobileNumber}</div>
               </div>
-            )}
-            {report.assignmentHistory.length > 1 && (
-              <ol className="mt-3 space-y-1 border-t border-slate-100 pt-3 text-xs text-slate-500">
-                {report.assignmentHistory.map((a) => (
-                  <li key={a.id}>
-                    Attempt {a.attempt}: {a.engineer.fullName} by {a.assignedBy.fullName}, {formatDate(a.createdAt)}
-                    {a.reason !== null && ` — ${a.reason}`}
-                  </li>
-                ))}
-              </ol>
-            )}
-          </Card>
+            </div>
+            <div className="border-t border-ink-100 pt-4">
+              <div className="text-xs text-ink-500">Assignment</div>
+              {report.assignment.engineer === null ? (
+                <>
+                  <div className="font-semibold text-ink-900">Not assigned</div>
+                  {!actions.assign && report.status !== "COMPLETED" && report.status !== "REJECTED" && (
+                    <div className="text-[13px] text-ink-500">You can assign an engineer once the report is accepted.</div>
+                  )}
+                </>
+              ) : (
+                <div className="text-sm">
+                  <Link to={`/admin/engineers/${report.assignment.engineer.id}`} className="font-semibold text-cobalt-600 hover:text-cobalt-700">
+                    {report.assignment.engineer.fullName}
+                  </Link>
+                  <p className="text-[13px] text-ink-500">
+                    Assigned {formatDate(report.assignment.assignedAt)} · attempt {attempt}
+                  </p>
+                  <Link to={`/chat?with=${report.assignment.engineer.id}`} className="mt-1 inline-block text-[13px] font-semibold text-cobalt-600 hover:text-cobalt-700">
+                    Message engineer
+                  </Link>
+                </div>
+              )}
+              {report.assignmentHistory.length > 1 && (
+                <ol className="mt-3 space-y-1 border-t border-ink-100 pt-3 text-xs text-ink-500">
+                  {report.assignmentHistory.map((a) => (
+                    <li key={a.id}>
+                      Attempt {a.attempt}: {a.engineer.fullName} by {a.assignedBy.fullName}, {formatDate(a.createdAt)}
+                      {a.reason !== null && ` — ${a.reason}`}
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          </section>
         </div>
       </div>
 
@@ -351,70 +506,63 @@ export function AdminReportDetailPage() {
   );
 }
 
-function BackLink() {
-  return (
-    <Link to="/admin/reports" className="text-sm font-medium text-blue-600 hover:text-blue-700">
-      ← All reports
-    </Link>
-  );
-}
 
 function SeverityCard({ report, onSave }: { report: AdminReport; onSave: (severity: SeverityLevel) => Promise<void> }) {
-  const [value, setValue] = useState<SeverityLevel | "">(report.severity.admin ?? "");
-  const [saving, setSaving] = useState(false);
+  const [saving, setSaving] = useState<SeverityLevel>();
   const [error, setError] = useState<string>();
 
-  async function save() {
-    if (value === "") return;
-    setSaving(true);
+  async function save(value: SeverityLevel) {
+    if (value === report.severity.admin) return;
+    setSaving(value);
     setError(undefined);
     try {
       await onSave(value);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
-      setSaving(false);
+      setSaving(undefined);
     }
   }
 
   return (
-    <Card title="Severity">
-      <dl className="grid grid-cols-2 gap-2 text-sm">
-        <dt className="text-slate-500">Automatic estimate</dt>
-        <dd>
-          {report.severity.ai === null ? "Not estimated" : <Badge tone={severityTone[report.severity.ai]}>{severityLabel[report.severity.ai]}</Badge>}
-        </dd>
-        <dt className="text-slate-500">Admin severity</dt>
-        <dd>
-          {report.severity.admin === null ? (
-            "—"
-          ) : (
-            <>
-              <Badge tone={severityTone[report.severity.admin]}>{severityLabel[report.severity.admin]}</Badge>
-              {report.severity.adminSetBy !== null && <span className="block text-xs text-slate-500">by {report.severity.adminSetBy.fullName}</span>}
-            </>
-          )}
-        </dd>
-      </dl>
-      <div className="mt-3 flex gap-2">
-        <select
-          aria-label="Set severity"
-          value={value}
-          onChange={(e) => setValue(e.target.value as SeverityLevel | "")}
-          className="rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-        >
-          <option value="">Choose…</option>
-          <option value="LOW">Low</option>
-          <option value="MEDIUM">Medium</option>
-          <option value="HIGH">High</option>
-        </select>
-        <Button variant="secondary" loading={saving} disabled={value === "" || value === report.severity.admin} onClick={() => void save()}>
-          Save
-        </Button>
-      </div>
-      {error !== undefined && <div className="mt-2"><Alert>{error}</Alert></div>}
-      <div className="mt-3">
-        <SeverityNote />
+    <Card title="Estimated severity" actions={<SeverityIndicator level={report.severity.ai} estimated size="lg" />}>
+      <SeverityExplanation status={report.analysis.status} level={report.severity.ai} score={report.analysis.severityScore} detections={report.analysis.detections} />
+      <div className="mt-4 border-t border-ink-100 pt-4">
+        <div className="mb-2 text-sm font-semibold text-ink-900">
+          Admin severity{" "}
+          <span className="font-normal text-ink-500">
+            ·{" "}
+            {report.severity.admin === null
+              ? "not set"
+              : `${severityLabel[report.severity.admin]}${report.severity.adminSetBy !== null ? `, set by ${report.severity.adminSetBy.fullName}` : ""}`}
+          </span>
+        </div>
+        <div role="group" aria-label="Set admin severity" className="flex gap-2">
+          {(["LOW", "MEDIUM", "HIGH"] as const).map((level) => {
+            const selected = report.severity.admin === level;
+            return (
+              <button
+                key={level}
+                type="button"
+                aria-pressed={selected}
+                disabled={saving !== undefined}
+                onClick={() => void save(level)}
+                className={`flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg border text-sm font-semibold transition-colors disabled:opacity-60 ${
+                  selected ? "border-ink-900 bg-ink-900 text-white" : "border-ink-300 bg-white text-ink-900 hover:bg-ink-100"
+                }`}
+              >
+                {saving === level && <Spinner className="size-4" />}
+                {severityLabel[level]}
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-2 text-xs text-ink-500">Your correction is used everywhere; the automatic estimate is kept alongside it.</p>
+        {error !== undefined && (
+          <div className="mt-2">
+            <Alert>{error}</Alert>
+          </div>
+        )}
       </div>
     </Card>
   );

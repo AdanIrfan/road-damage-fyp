@@ -76,7 +76,14 @@ describe("admin report workflow (review, decisions, severity)", { skip: skipWith
       const opened = await admin.get(base(id));
       assert.equal(opened.status, 200);
       assert.equal(reportOf(opened)["status"], "SUBMITTED");
-      assert.deepEqual(reportOf(opened)["allowedActions"], { review: true, decide: false, assign: false, feedback: false, confirmCompletion: false });
+      assert.deepEqual(reportOf(opened)["allowedActions"], {
+        review: true,
+        decide: false,
+        assign: false,
+        feedback: false,
+        confirmCompletion: false,
+        retryAnalysis: false,
+      });
       assert.equal((await db.prisma.report.findUniqueOrThrow({ where: { id } })).status, "SUBMITTED");
 
       const reviewed = await admin.post(`${base(id)}/review`);
@@ -191,14 +198,16 @@ describe("admin report workflow (review, decisions, severity)", { skip: skipWith
       const id = await submitReport(citizen);
       await admin.post(`${base(id)}/review`);
       ctx.sms.failWith = new Error("provider down");
-      const warn = mock.method(console, "warn", () => undefined);
+      // Warnings are structured JSON lines on stderr (utils/logger.ts).
+      const warn = mock.method(process.stderr, "write", () => true);
       try {
         const res = await admin.post(`${base(id)}/decision`, { decision: "DELAY", reason: "Waiting for materials" });
         assert.equal(res.status, 200);
         assert.equal(res.body.data?.["notification"], "failed");
         assert.equal(reportOf(res)["status"], "DELAYED");
         const logged = warn.mock.calls.map((c) => String(c.arguments[0])).join("\n");
-        assert.match(logged, /SMS notification failed \(event DELAYED/);
+        assert.match(logged, /"event":"citizen_sms_failed"/);
+        assert.match(logged, /"status":"DELAYED"/);
         assert.ok(!logged.includes(numbers.citizen), "full number never logged");
         assert.match(logged, /\*+101/);
       } finally {

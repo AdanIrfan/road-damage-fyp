@@ -95,8 +95,8 @@ export function EngineerDetailPage() {
   }
 
   const backLink = (
-    <Link to="/admin/engineers" className="text-sm font-medium text-blue-600 hover:text-blue-700">
-      ← All engineers
+    <Link to="/admin/engineers" className="text-sm font-medium text-cobalt-600 hover:text-cobalt-700">
+      All engineers
     </Link>
   );
 
@@ -110,7 +110,7 @@ export function EngineerDetailPage() {
   }
   if (engineer === undefined) {
     return (
-      <div className="flex justify-center py-16 text-blue-600">
+      <div className="flex justify-center py-16 text-cobalt-600">
         <Spinner />
       </div>
     );
@@ -123,15 +123,15 @@ export function EngineerDetailPage() {
       {backLink}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900">{engineer.fullName}</h1>
-          <p className="mt-1 text-sm text-slate-500">Maintenance engineer · created {formatDate(engineer.createdAt)}</p>
+          <h1 className="text-2xl font-bold tracking-tight text-ink-900">{engineer.fullName}</h1>
+          <p className="mt-1 text-sm text-ink-500">Maintenance engineer · created {formatDate(engineer.createdAt)}</p>
         </div>
         <div className="flex items-center gap-3">
           <Badge tone={statusTone[engineer.status]}>{statusLabel[engineer.status]}</Badge>
           {engineer.status === "ACTIVE" && (
             <Link
               to={`/chat?with=${engineer.id}`}
-              className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+              className="rounded-lg border border-ink-300 bg-white px-4 py-2 text-sm font-semibold text-ink-600 hover:bg-canvas"
             >
               Send message
             </Link>
@@ -168,7 +168,7 @@ export function EngineerDetailPage() {
         {jobs === undefined ? (
           <Spinner />
         ) : jobs.open.length === 0 ? (
-          <p className="text-sm text-slate-500">No open jobs.</p>
+          <p className="text-sm text-ink-500">No open jobs.</p>
         ) : (
           <AdminReportTable items={jobs.open} />
         )}
@@ -177,7 +177,7 @@ export function EngineerDetailPage() {
         {jobs === undefined ? (
           <Spinner />
         ) : jobs.completed.length === 0 ? (
-          <p className="text-sm text-slate-500">No completed jobs yet.</p>
+          <p className="text-sm text-ink-500">No completed jobs yet.</p>
         ) : (
           <AdminReportTable items={jobs.completed} />
         )}
@@ -188,9 +188,9 @@ export function EngineerDetailPage() {
 
 function Stat({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
-      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="mt-1 text-2xl font-semibold text-slate-900">{value}</div>
+    <div className="rounded-lg border border-ink-150 bg-white px-4 py-3">
+      <div className="text-xs font-medium tracking-wider uppercase text-ink-500">{label}</div>
+      <div className="mt-1 text-2xl font-bold tracking-tight text-ink-900">{value}</div>
     </div>
   );
 }

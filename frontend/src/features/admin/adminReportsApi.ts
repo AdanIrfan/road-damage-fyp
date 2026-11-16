@@ -5,6 +5,7 @@ import type {
   AdminReport,
   AdminReportListItem,
   EngineerSuggestion,
+  PossibleDuplicates,
   SeverityLevel,
 } from "../../lib/reportTypes";
 import type { Paginated } from "../../lib/types";
@@ -38,7 +39,18 @@ export const adminReportsApi = {
     }
     return api.get<Paginated<AdminReportListItem>>(`/api/v1/admin/reports?${params.toString()}`);
   },
+  /** Points for the overview map: same filters as the list, newest first, capped by the backend. */
+  map: (filters: AdminReportFilters) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters)) {
+      if (value !== undefined && value !== "" && key !== "page" && key !== "pageSize") params.set(key, value);
+    }
+    return api.get<{ points: AdminReportListItem[]; total: number; truncated: boolean }>(`/api/v1/admin/reports/map?${params.toString()}`);
+  },
   get: (id: string) => api.get<{ report: AdminReport }>(base(id)),
+  possibleDuplicates: (id: string) => api.get<PossibleDuplicates>(`${base(id)}/possible-duplicates`),
+  /** Runs the automatic analysis again for a report whose analysis failed. */
+  retryAnalysis: (id: string) => api.post<{ report: AdminReport; analysis: "completed" | "failed" }>(`${base(id)}/retry-analysis`),
   review: (id: string) => api.post<AdminActionResult>(`${base(id)}/review`),
   decide: (id: string, decision: "ACCEPT" | "REJECT" | "DELAY", reason?: string) =>
     api.post<AdminActionResult>(`${base(id)}/decision`, reason === undefined || reason === "" ? { decision } : { decision, reason }),

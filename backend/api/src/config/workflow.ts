@@ -20,3 +20,15 @@ export const SMS_REASON_MAX_LENGTH = 120;
 
 export const ADMIN_REPORT_LIST_MAX_PAGE_SIZE = 50;
 export const ADMIN_DASHBOARD_RECENT_COUNT = 5;
+
+/** Most reports drawn on the admin overview map at once (newest first). */
+export const ADMIN_MAP_MAX_POINTS = 500;
+
+/**
+ * Possible-duplicate hint for administrators (Phase 6). Another report counts as a possible
+ * duplicate when it is within this distance AND was submitted within this many days of the
+ * report being viewed. A hint only: nothing is ever merged, rejected or blocked because of it.
+ */
+export const DUPLICATE_HINT_RADIUS_METERS = 50;
+export const DUPLICATE_HINT_WINDOW_DAYS = 30;
+export const DUPLICATE_HINT_MAX_RESULTS = 10;

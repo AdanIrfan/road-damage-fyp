@@ -67,19 +67,19 @@ export function AssignEngineerDialog({
           </Alert>
         )}
         {engineers === undefined && error === undefined && (
-          <div className="flex justify-center py-6 text-blue-600">
+          <div className="flex justify-center py-6 text-cobalt-600">
             <Spinner />
           </div>
         )}
         {engineers !== undefined && engineers.length === 0 && <Alert>No active engineer accounts. Create or activate an engineer first.</Alert>}
         {engineers !== undefined && engineers.length > 0 && (
           <fieldset className="space-y-2">
-            <legend className="text-sm font-medium text-slate-700">Engineers (fewest open jobs first)</legend>
+            <legend className="text-sm font-medium text-ink-600">Engineers (fewest open jobs first)</legend>
             {engineers.map((engineer) => (
               <label
                 key={engineer.id}
-                className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2 text-sm ${
-                  selected === engineer.id ? "border-blue-500 bg-blue-50" : "border-slate-200"
+                className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 text-sm ${
+                  selected === engineer.id ? "border-cobalt-600 bg-cobalt-50" : "border-ink-150"
                 } ${engineer.isCurrent ? "cursor-not-allowed opacity-60" : ""}`}
               >
                 <input
@@ -92,13 +92,13 @@ export function AssignEngineerDialog({
                   onChange={() => setSelected(engineer.id)}
                 />
                 <span>
-                  <span className="font-medium text-slate-900">{engineer.fullName}</span>
-                  <span className="block text-slate-500">
+                  <span className="font-medium text-ink-900">{engineer.fullName}</span>
+                  <span className="block text-ink-500">
                     {engineer.openJobs} open job{engineer.openJobs === 1 ? "" : "s"}
                     {engineer.isCurrent && " · currently assigned"}
                   </span>
                   {engineer.mustChangePassword && (
-                    <span className="block text-xs text-amber-700">Has not replaced the temporary password yet (cannot open jobs until then).</span>
+                    <span className="block text-xs text-warning-800">Has not replaced the temporary password yet (cannot open jobs until then).</span>
                   )}
                 </span>
               </label>
@@ -106,15 +106,15 @@ export function AssignEngineerDialog({
           </fieldset>
         )}
         <div>
-          <label htmlFor={reasonId} className="block text-sm font-medium text-slate-700">
-            Reason <span className="font-normal text-slate-400">(optional)</span>
+          <label htmlFor={reasonId} className="block text-sm font-medium text-ink-600">
+            Reason <span className="font-normal text-ink-500">(optional)</span>
           </label>
           <input
             id={reasonId}
             value={reason}
             maxLength={500}
             onChange={(e) => setReason(e.target.value)}
-            className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            className="mt-1 block w-full rounded-lg border border-ink-300 px-3 py-2 text-sm outline-none focus:border-cobalt-600 focus:ring-2 focus:ring-cobalt-100"
           />
         </div>
         {error !== undefined && <Alert>{error}</Alert>}

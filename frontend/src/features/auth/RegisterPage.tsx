@@ -1,3 +1,4 @@
+import { Lock, Phone, UserRound } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 import { Alert, Button, TextField } from "../../components/ui";
@@ -48,7 +49,7 @@ export function RegisterPage() {
       footer={
         <>
           Already have an account?{" "}
-          <Link to="/login" className="font-semibold text-blue-600 hover:text-blue-700">
+          <Link to="/login" className="font-semibold text-cobalt-600 hover:text-cobalt-700">
             Log in
           </Link>
         </>
@@ -56,13 +57,14 @@ export function RegisterPage() {
     >
       <form onSubmit={handleSubmit} className="space-y-4" noValidate>
         {error !== undefined && <Alert>{error}</Alert>}
-        <TextField label="Full name" autoComplete="name" value={form.fullName} onChange={update("fullName")} error={firstError(fieldErrors, "fullName")} required />
+        <TextField label="Full name" autoComplete="name" icon={<UserRound className="size-[18px]" />} value={form.fullName} onChange={update("fullName")} error={firstError(fieldErrors, "fullName")} required />
         <TextField
           label="Mobile number"
           type="tel"
           autoComplete="tel"
-          placeholder="+1 202 555 0143"
-          hint="Include your country code."
+          placeholder="+92 300 1234567"
+          hint="Include your country code. We send a 6-digit code to this number."
+          icon={<Phone className="size-[18px]" />}
           value={form.mobileNumber}
           onChange={update("mobileNumber")}
           error={firstError(fieldErrors, "mobileNumber")}
@@ -73,6 +75,7 @@ export function RegisterPage() {
           type="password"
           autoComplete="new-password"
           hint="At least 8 characters."
+          icon={<Lock className="size-[18px]" />}
           value={form.password}
           onChange={update("password")}
           error={firstError(fieldErrors, "password")}
@@ -82,12 +85,13 @@ export function RegisterPage() {
           label="Confirm password"
           type="password"
           autoComplete="new-password"
+          icon={<Lock className="size-[18px]" />}
           value={form.confirmPassword}
           onChange={update("confirmPassword")}
           error={firstError(fieldErrors, "confirmPassword")}
           required
         />
-        <Button type="submit" loading={submitting} className="w-full">
+        <Button type="submit" size="lg" loading={submitting} className="w-full">
           Create account
         </Button>
       </form>

@@ -55,7 +55,7 @@ export function PhotoUploader({
 
   return (
     <div className="space-y-2">
-      <label htmlFor={inputId} className="block text-sm font-medium text-slate-700">
+      <label htmlFor={inputId} className="block text-sm font-medium text-ink-600">
         {label}
       </label>
       <div className="flex flex-wrap items-center gap-3">
@@ -67,11 +67,11 @@ export function PhotoUploader({
           multiple
           disabled={busy || remaining === 0}
           onChange={(e) => void handleFiles(e)}
-          className="block text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-blue-700 hover:file:bg-blue-100 disabled:opacity-60"
+          className="block text-sm text-ink-600 file:mr-3 file:rounded-lg file:border-0 file:bg-cobalt-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-cobalt-700 hover:file:bg-cobalt-100 disabled:opacity-60"
         />
-        {busy && <Spinner className="size-5 text-blue-600" />}
+        {busy && <Spinner className="size-5 text-cobalt-600" />}
       </div>
-      <p className="text-xs text-slate-500">
+      <p className="text-xs text-ink-500">
         {count} of {max} photos for this attempt · JPEG or PNG, up to 10 MB each
         {remaining === 0 && " · limit reached"}
       </p>

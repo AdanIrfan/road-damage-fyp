@@ -43,10 +43,23 @@ export class AiServiceError extends Error {
   }
 }
 
+/** What administrators may know about the AI service: no URL, no secret, no error details. */
+export interface AiHealth {
+  status: "online" | "offline" | "not_configured";
+  /** null when the service could not be asked. */
+  modelLoaded: boolean | null;
+}
+
 export interface AiClient {
   /** Sends an image to the AI service and returns its validated detections. */
   analyze(image: Buffer, contentType: string): Promise<AiAnalysis>;
+  /** Asks the AI service's unauthenticated /health endpoint. Never throws. */
+  health(): Promise<AiHealth>;
 }
+
+/** The health check must stay quick: it is polled by the admin interface. */
+const HEALTH_TIMEOUT_MS = 3000;
+const aiHealthSchema = z.object({ status: z.string(), model_loaded: z.boolean() });
 
 const finite = z.number().finite();
 
@@ -98,6 +111,26 @@ export function createHttpAiClient(options: HttpAiClientOptions): AiClient {
   const endpoint = `${options.baseUrl}/v1/detect`;
 
   return {
+    health: async () => {
+      try {
+        const response = await fetch(`${options.baseUrl}/health`, {
+          headers: { Accept: "application/json" },
+          signal: AbortSignal.timeout(Math.min(HEALTH_TIMEOUT_MS, options.timeoutMs)),
+        });
+        if (!response.ok) {
+          return { status: "offline", modelLoaded: null };
+        }
+        const parsed = aiHealthSchema.safeParse(JSON.parse(await readLimitedText(response)));
+        if (!parsed.success) {
+          return { status: "offline", modelLoaded: null };
+        }
+        return { status: "online", modelLoaded: parsed.data.model_loaded };
+      } catch {
+        // Unreachable, timed out or not JSON: all mean "offline" to an administrator.
+        return { status: "offline", modelLoaded: null };
+      }
+    },
+
     analyze: async (image, contentType) => {
       const form = new FormData();
       // The file name is fixed: nothing from the client's upload is forwarded.
@@ -194,4 +227,5 @@ async function readLimitedText(response: Response): Promise<string> {
 /** Used when no AI service is configured (test environment only): every analysis fails honestly. */
 export const unconfiguredAiClient: AiClient = {
   analyze: () => Promise.reject(new AiServiceError("unavailable", "AI service is not configured")),
+  health: () => Promise.resolve({ status: "not_configured", modelLoaded: null }),
 };

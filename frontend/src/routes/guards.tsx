@@ -44,8 +44,9 @@ export function PublicOnly() {
   return <Outlet />;
 }
 
-export function HomeRedirect() {
+export function HomeRedirect({ anonymous }: { anonymous: ReactNode }) {
   const { state } = useAuth();
-  if (state.status !== "authenticated") return <FullPageSpinner />;
+  if (state.status === "loading") return <FullPageSpinner />;
+  if (state.status === "anonymous") return anonymous;
   return <Navigate to={homePathFor(state.user)} replace />;
 }

@@ -53,7 +53,7 @@ export function GalleryPicker({ photo, location, onPhotoChange, onLocationChange
   return (
     <div className="space-y-5">
       <div className="space-y-2">
-        <label htmlFor={inputId} className="block text-sm font-medium text-slate-700">
+        <label htmlFor={inputId} className="block text-sm font-medium text-ink-600">
           Photo of the damage
         </label>
         <input
@@ -61,19 +61,19 @@ export function GalleryPicker({ photo, location, onPhotoChange, onLocationChange
           type="file"
           accept={ALLOWED_PHOTO_TYPES.join(",")}
           onChange={handleFile}
-          className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-blue-700 hover:file:bg-blue-100"
+          className="block w-full text-sm text-ink-600 file:mr-3 file:rounded-lg file:border-0 file:bg-cobalt-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-cobalt-700 hover:file:bg-cobalt-100"
         />
-        <p className="text-xs text-slate-500">JPEG or PNG, up to 10 MB.</p>
+        <p className="text-xs text-ink-500">JPEG or PNG, up to 10 MB.</p>
         {error !== undefined && <Alert>{error}</Alert>}
         {previewUrl !== undefined && (
-          <img src={previewUrl} alt="Selected road damage" className="max-h-80 w-full rounded-lg bg-slate-100 object-contain" />
+          <img src={previewUrl} alt="Selected road damage" className="max-h-80 w-full rounded-lg bg-ink-100 object-contain" />
         )}
       </div>
 
       <div className="space-y-2">
-        <p className="text-sm font-medium text-slate-700">Where is the damage?</p>
+        <p className="text-sm font-medium text-ink-600">Where is the damage?</p>
         <LocationMap value={location} onChange={onLocationChange} />
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-ink-500">
           If your photo contains location data, we compare it with the place you select. Reports are never rejected because of this;
           differences are checked by an administrator.
         </p>

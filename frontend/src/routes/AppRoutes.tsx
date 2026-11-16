@@ -17,6 +17,9 @@ import { EngineerDashboardPage } from "../features/engineer/EngineerDashboardPag
 import { EngineerHistoryPage } from "../features/engineer/EngineerHistoryPage";
 import { EngineerJobDetailPage } from "../features/engineer/EngineerJobDetailPage";
 import { AppLayout } from "../layouts/AppLayout";
+import { AdminMapPage } from "../features/admin/AdminMapPage";
+import { NotificationsPage } from "../features/notifications/NotificationsPage";
+import { LandingPage } from "../pages/LandingPage";
 import { NotFoundPage } from "../pages/NotFoundPage";
 import { ProfilePage } from "../pages/ProfilePage";
 import { HomeRedirect, PublicOnly, RequireAuth, RequireRole } from "./guards";
@@ -24,6 +27,8 @@ import { HomeRedirect, PublicOnly, RequireAuth, RequireRole } from "./guards";
 export function AppRoutes() {
   return (
     <Routes>
+      {/* Visitors see the landing page; logged-in users go to their role's home. */}
+      <Route path="/" element={<HomeRedirect anonymous={<LandingPage />} />} />
       <Route element={<PublicOnly />}>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
@@ -33,8 +38,8 @@ export function AppRoutes() {
       <Route element={<RequireAuth />}>
         <Route path="/change-password" element={<ChangePasswordPage />} />
         <Route element={<AppLayout />}>
-          <Route index element={<HomeRedirect />} />
           <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/reports" element={<RequireRole roles={["CITIZEN"]} />}>
             <Route index element={<CitizenDashboardPage />} />
             <Route path="new" element={<NewReportPage />} />
@@ -43,6 +48,7 @@ export function AppRoutes() {
           <Route path="/admin" element={<RequireRole roles={["ADMIN"]} />}>
             <Route index element={<AdminDashboardPage />} />
             <Route path="analytics" element={<AdminAnalyticsPage />} />
+            <Route path="map" element={<AdminMapPage />} />
             <Route path="reports" element={<AdminReportsPage />} />
             <Route path="reports/:id" element={<AdminReportDetailPage />} />
             <Route path="engineers" element={<EngineersPage />} />

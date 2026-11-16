@@ -115,3 +115,18 @@ export function repairStatusWithAttempt(status: RepairStatus | null, attempt: nu
   if (status === null) return "Not assigned";
   return attempt !== null && attempt > 1 ? `${repairStatusLabel[status]} (attempt ${attempt})` : repairStatusLabel[status];
 }
+
+/** Short title for a report in lists: what was detected, or why nothing is shown. */
+export function reportTitle(damageClasses: string[], analysisStatus: AiAnalysisStatus): string {
+  if (damageClasses.length > 0) return damageClasses.map(damageClassLabel).join(", ");
+  return analysisStatus === "FAILED" ? "Analysis unavailable" : "No damage detected";
+}
+
+/** "3 d", "5 h", "12 min": how long ago something happened, for "waiting" columns. */
+export function formatAge(iso: string): string {
+  const minutes = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60_000));
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h`;
+  return `${Math.floor(hours / 24)} d`;
+}

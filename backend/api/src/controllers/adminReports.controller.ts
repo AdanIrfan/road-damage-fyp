@@ -17,6 +17,7 @@ import {
 export interface AdminReportsController {
   dashboard: RequestHandler;
   list: RequestHandler;
+  map: RequestHandler;
   get: RequestHandler;
   review: RequestHandler;
   decide: RequestHandler;
@@ -24,6 +25,8 @@ export interface AdminReportsController {
   feedback: RequestHandler;
   confirmCompletion: RequestHandler;
   suggestions: RequestHandler;
+  possibleDuplicates: RequestHandler;
+  retryAnalysis: RequestHandler;
   assign: RequestHandler;
 }
 
@@ -35,6 +38,18 @@ export function createAdminReportsController(deps: { reports: AdminReportService
   return {
     dashboard: async (_req, res) => {
       sendSuccess(res, { dashboard: await reports.dashboard() });
+    },
+
+    map: async (req, res) => {
+      sendSuccess(res, await reports.mapPoints(parseInput(listAdminReportsQuerySchema, req.query)));
+    },
+
+    possibleDuplicates: async (req, res) => {
+      sendSuccess(res, await reports.possibleDuplicates(id(req.params)));
+    },
+
+    retryAnalysis: async (req, res) => {
+      sendSuccess(res, await reports.retryAnalysis(getAuthUser(req).id, id(req.params)));
     },
 
     list: async (req, res) => {

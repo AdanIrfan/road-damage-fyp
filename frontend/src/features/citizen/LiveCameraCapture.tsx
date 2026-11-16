@@ -150,7 +150,7 @@ export function LiveCameraCapture({ value, onCapture, onReset }: { value: LiveCa
   if (value !== null && previewUrl !== undefined) {
     return (
       <div className="space-y-4">
-        <img src={previewUrl} alt="Captured road damage" className="max-h-96 w-full rounded-lg bg-slate-100 object-contain" />
+        <img src={previewUrl} alt="Captured road damage" className="max-h-96 w-full rounded-lg bg-ink-100 object-contain" />
         <LocationMap value={value.location} accuracyMeters={value.accuracyMeters} className="h-56" />
         <LocationSummary latitude={value.location.latitude} longitude={value.location.longitude} accuracy={value.accuracyMeters} />
         <Button type="button" variant="secondary" onClick={onReset}>
@@ -167,7 +167,7 @@ export function LiveCameraCapture({ value, onCapture, onReset }: { value: LiveCa
     <div className="space-y-4">
       {cameraError !== undefined && <Alert>{cameraError}</Alert>}
       {captureError !== undefined && <Alert>{captureError}</Alert>}
-      <div className="relative overflow-hidden rounded-lg bg-slate-900">
+      <div className="relative overflow-hidden rounded-lg bg-ink-900">
         <video ref={videoRef} playsInline muted className="aspect-video w-full object-contain" />
         {cameraState === "starting" && (
           <div className="absolute inset-0 flex items-center justify-center text-white">
@@ -177,10 +177,10 @@ export function LiveCameraCapture({ value, onCapture, onReset }: { value: LiveCa
         )}
       </div>
 
-      <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm" aria-live="polite">
+      <div className="rounded-lg border border-ink-150 bg-canvas px-4 py-3 text-sm" aria-live="polite">
         {gps.status === "waiting" && (
-          <div className="flex items-center gap-2 text-slate-600">
-            <Spinner className="size-4 text-blue-600" /> Finding your location…
+          <div className="flex items-center gap-2 text-ink-600">
+            <Spinner className="size-4 text-cobalt-600" /> Finding your location…
           </div>
         )}
         {current !== undefined && (
@@ -188,7 +188,7 @@ export function LiveCameraCapture({ value, onCapture, onReset }: { value: LiveCa
         )}
         {gps.status === "error" && (
           <div className="mt-2 space-y-2">
-            <p className="text-red-700">{gps.message}</p>
+            <p className="text-danger-700">{gps.message}</p>
             <Button type="button" variant="secondary" className="px-3 py-1.5" onClick={restartGps}>
               Try location again
             </Button>
@@ -206,7 +206,7 @@ export function LiveCameraCapture({ value, onCapture, onReset }: { value: LiveCa
           </Button>
         )}
       </div>
-      <p className="text-xs text-slate-500">
+      <p className="text-xs text-ink-500">
         Your browser will ask for permission to use the camera and your location. Accuracy depends on your device: phones with GPS
         are usually most accurate outdoors; laptops often estimate the location from Wi-Fi.
       </p>
@@ -219,15 +219,15 @@ function LocationSummary({ latitude, longitude, accuracy, live = false }: { lati
   const poor = accuracy > GPS_ACCURACY_WARNING_METERS;
   return (
     <div className="space-y-1 text-sm">
-      <p className="text-slate-700">
+      <p className="text-ink-600">
         {live ? "Current location" : "Location recorded with the photo"}:{" "}
         <span className="font-mono">
           {latitude.toFixed(6)}, {longitude.toFixed(6)}
         </span>{" "}
-        <span className={poor ? "font-medium text-amber-700" : "text-slate-500"}>(accuracy ±{Math.round(accuracy)} m)</span>
+        <span className={poor ? "font-medium text-warning-800" : "text-ink-500"}>(accuracy ±{Math.round(accuracy)} m)</span>
       </p>
       {poor && (
-        <p className="text-amber-700">
+        <p className="text-warning-800">
           Your device reports low location accuracy. {live ? "Wait a few seconds, turn on precise location/GPS, or move outdoors. " : ""}
           You can still submit: an administrator will check the location.
         </p>

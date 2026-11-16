@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { useSearchParams } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { Pagination } from "../../components/Pagination";
-import { Alert, Button, Card, Spinner } from "../../components/ui";
+import { Search, SlidersHorizontal } from "lucide-react";
+import { Alert, Button, EmptyState, fieldClass, PageHeader, SkeletonList } from "../../components/ui";
 import { REPORT_STATUSES, reportStatusLabel } from "../../components/reports/labels";
 import { errorMessage } from "../../lib/api";
 import type { AdminReportListItem } from "../../lib/reportTypes";
@@ -25,8 +26,31 @@ const FILTER_KEYS: (keyof AdminReportFilters)[] = [
   "repairStatus",
 ];
 
-const selectClass =
-  "rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
+const selectClass = `${fieldClass} min-h-10`;
+
+/** One-click queues. Each is just a set of URL filters, so it can be bookmarked and shared. */
+const QUICK_VIEWS: { label: string; query: string }[] = [
+  { label: "All", query: "" },
+  { label: "Longest waiting", query: "sort=waiting" },
+  { label: "Highest severity", query: "sort=severity" },
+  { label: "New", query: "status=SUBMITTED&sort=oldest" },
+  { label: "Under review", query: "status=UNDER_REVIEW&sort=oldest" },
+  { label: "To assign", query: "status=ACCEPTED&assignment=unassigned&sort=oldest" },
+  { label: "Awaiting confirmation", query: "status=ACCEPTED&repairStatus=COMPLETED" },
+  { label: "Location to check", query: "needsLocationReview=true" },
+  { label: "AI failed", query: "aiStatus=FAILED" },
+];
+
+/** Same filters regardless of their order in the URL (the page number is ignored). */
+function sameView(a: URLSearchParams, query: string): boolean {
+  const normalise = (params: URLSearchParams) =>
+    [...params.entries()]
+      .filter(([name]) => name !== "page")
+      .map(([name, value]) => `${name}=${value}`)
+      .sort()
+      .join("&");
+  return normalise(a) === normalise(new URLSearchParams(query));
+}
 
 export function AdminReportsPage() {
   const [params, setParams] = useSearchParams();
@@ -75,26 +99,62 @@ export function AdminReportsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-900">Reports</h1>
-        <p className="mt-1 text-sm text-slate-500">All road damage reports. Opening a report does not change its status.</p>
-      </div>
+      <PageHeader
+        title="Reports"
+        description={
+          result === undefined
+            ? "All road damage reports. Opening a report does not change its status."
+            : `${result.total} report${result.total === 1 ? "" : "s"}${active ? " match these filters" : ""}. Opening a report does not change its status.`
+        }
+        actions={
+          <Link to={`/admin/map${filters.status !== undefined ? `?status=${filters.status}` : ""}`} className="text-[13px] font-semibold text-cobalt-600 hover:text-cobalt-700">
+            Show on map
+          </Link>
+        }
+      />
 
-      <Card>
+      <nav aria-label="Quick views" className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0">
+        {QUICK_VIEWS.map((view) => {
+          const current = sameView(params, view.query);
+          return (
+            <Link
+              key={view.label}
+              to={`/admin/reports${view.query === "" ? "" : `?${view.query}`}`}
+              aria-current={current ? "page" : undefined}
+              className={`flex min-h-9 shrink-0 items-center rounded-full border px-3.5 text-[13px] font-semibold whitespace-nowrap transition-colors ${
+                current ? "border-ink-900 bg-ink-900 text-white" : "border-ink-300 bg-white text-ink-900 hover:bg-ink-100"
+              }`}
+            >
+              {view.label}
+            </Link>
+          );
+        })}
+      </nav>
+
+      <section className="overflow-hidden rounded-xl border border-ink-150 bg-white">
+        <div className="space-y-3 p-4 sm:p-5">
         <form onSubmit={submitSearch} className="flex gap-2">
-          <input
-            type="search"
-            aria-label="Search reports"
-            placeholder="Citizen name or mobile, description, or full report id"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="block w-full min-w-0 rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-          />
+          <label className="relative block min-w-0 flex-1">
+            <span className="sr-only">Search reports</span>
+            <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-500" aria-hidden="true" />
+            <input
+              type="search"
+              placeholder="Citizen name or mobile, description, or full report id"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className={`${fieldClass} min-h-10 pl-9`}
+            />
+          </label>
           <Button type="submit" variant="secondary">
             Search
           </Button>
         </form>
 
+        <details className="group" open={active}>
+          <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 text-[13px] font-semibold text-cobalt-600">
+            <SlidersHorizontal className="size-4" aria-hidden="true" />
+            Filters and sorting
+          </summary>
         <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-6">
           <select aria-label="Status" value={filters.status ?? ""} onChange={(e) => setFilter("status", e.target.value)} className={selectClass}>
             <option value="">All statuses</option>
@@ -134,12 +194,14 @@ export function AdminReportsPage() {
           <select aria-label="Sort" value={filters.sort ?? "newest"} onChange={(e) => setFilter("sort", e.target.value)} className={selectClass}>
             <option value="newest">Newest first</option>
             <option value="oldest">Oldest first</option>
+            <option value="severity">Highest severity first</option>
+            <option value="waiting">Longest waiting (open reports)</option>
           </select>
-          <label className="flex flex-col text-xs text-slate-500">
+          <label className="flex flex-col text-xs text-ink-500">
             From
             <input type="date" value={filters.from ?? ""} onChange={(e) => setFilter("from", e.target.value)} className={selectClass} />
           </label>
-          <label className="flex flex-col text-xs text-slate-500">
+          <label className="flex flex-col text-xs text-ink-500">
             To
             <input type="date" value={filters.to ?? ""} onChange={(e) => setFilter("to", e.target.value)} className={selectClass} />
           </label>
@@ -165,19 +227,25 @@ export function AdminReportsPage() {
             </Button>
           )}
         </div>
+        </details>
+        {error !== undefined && <Alert>{error}</Alert>}
+        </div>
 
-        <div className="mt-4">
-          {error !== undefined && <Alert>{error}</Alert>}
+        <div className="border-t border-ink-100">
           {loading && result === undefined ? (
-            <div className="flex justify-center py-10 text-blue-600">
-              <Spinner />
+            <div className="p-5">
+              <SkeletonList rows={6} />
             </div>
           ) : result !== undefined && result.items.length === 0 ? (
-            <p className="py-10 text-center text-sm text-slate-500">{active ? "No reports match these filters." : "No reports yet."}</p>
+            <EmptyState
+              title={active ? "No reports match these filters" : "No reports yet"}
+              description={active ? "Clear or change the filters to see more reports." : "New reports from citizens will be listed here."}
+            />
           ) : (
             result !== undefined && <AdminReportTable items={result.items} dimmed={loading} />
           )}
         </div>
+        <div className="px-5 pb-4">
         {result !== undefined && (
           <Pagination
             page={result.page}
@@ -188,7 +256,8 @@ export function AdminReportsPage() {
             onPage={(page) => setFilter("page", String(page))}
           />
         )}
-      </Card>
+        </div>
+      </section>
     </div>
   );
 }

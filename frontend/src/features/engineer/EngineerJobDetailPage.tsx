@@ -1,23 +1,19 @@
+import { Check, ChevronLeft, MapPin } from "lucide-react";
 import { useCallback, useEffect, useId, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 import { ReasonDialog } from "../../components/Dialog";
-import { Alert, Badge, Button, Card, Spinner } from "../../components/ui";
-import {
-  damageClassLabel,
-  formatConfidence,
-  repairStatusLabel,
-  repairStatusTone,
-  severityLabel,
-  severityTone,
-} from "../../components/reports/labels";
+import { RepairPill, ReportRef, SeverityIndicator } from "../../components/reports/indicators";
+import { damageClassLabel, formatConfidence } from "../../components/reports/labels";
 import { LocationMap } from "../../components/reports/LocationMap";
 import { PhotoUploader } from "../../components/reports/PhotoUploader";
 import { RepairAttempts } from "../../components/reports/RepairAttempts";
-import { ReportPhoto } from "../../components/reports/ReportPhoto";
+import { detectionColor, ReportPhoto } from "../../components/reports/ReportPhoto";
 import { SeverityNote } from "../../components/reports/SeverityNote";
+import { Alert, Badge, Button, buttonClass, Card, fieldClass, Skeleton } from "../../components/ui";
 import { ApiError, errorMessage } from "../../lib/api";
 import type { EngineerJob } from "../../lib/reportTypes";
 import { formatDate } from "../../utils/format";
+import { useNotifications } from "../notifications/NotificationsContext";
 import { engineerJobsApi } from "./engineerJobsApi";
 
 export function EngineerJobDetailPage() {
@@ -30,6 +26,7 @@ export function EngineerJobDetailPage() {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [confirmReopen, setConfirmReopen] = useState(false);
+  const { refresh: refreshNotifications } = useNotifications();
 
   const load = useCallback(async () => {
     setConflict(false);
@@ -65,6 +62,7 @@ export function EngineerJobDetailPage() {
     try {
       setJob((await engineerJobsApi.setRepairStatus(job.id, status, job.repair.currentAttempt, text)).job);
       setNotice({ tone: "success", text: message });
+      refreshNotifications();
     } catch (err) {
       fail(err);
     } finally {
@@ -112,8 +110,11 @@ export function EngineerJobDetailPage() {
   }
   if (job === undefined) {
     return (
-      <div className="flex justify-center py-16 text-blue-600">
-        <Spinner />
+      <div className="mx-auto max-w-5xl space-y-5" role="status">
+        <span className="sr-only">Loading job</span>
+        <Skeleton className="h-10 w-2/3" />
+        <Skeleton className="h-48 w-full rounded-xl" />
+        <Skeleton className="h-72 w-full rounded-xl" />
       </div>
     );
   }
@@ -121,22 +122,35 @@ export function EngineerJobDetailPage() {
   const r = job.repair;
   const attempt = r.currentAttempt;
   const open = job.status === "ACCEPTED";
+  const canStart = r.allowedTransitions.includes("WORKING") && r.status === "PENDING";
   const canComplete = r.allowedTransitions.includes("COMPLETED");
+  const canReopen = r.allowedTransitions.includes("WORKING") && r.status === "COMPLETED";
   const hasPhoto = r.currentAttemptPhotoCount > 0;
+  const title = job.analysis.detections.length > 0
+    ? job.analysis.detections.map((d) => d.className).filter((name, index, all) => all.indexOf(name) === index).map(damageClassLabel).join(", ")
+    : "Road damage";
+  const mapsUrl = `https://www.openstreetmap.org/?mlat=${job.location.latitude}&mlon=${job.location.longitude}#map=18/${job.location.latitude}/${job.location.longitude}`;
+  // The three things to do on an attempt, in order.
+  const steps = [
+    { label: "Start work", done: r.status !== "PENDING", hint: r.status === "PENDING" ? "Tell the administrator you have begun." : undefined },
+    { label: `Add repair photos (${r.currentAttemptPhotoCount} of ${r.maxPhotosPerAttempt})`, done: hasPhoto, hint: hasPhoto ? undefined : "At least one photo of this attempt is needed." },
+    { label: "Mark completed", done: r.status === "COMPLETED", hint: r.status === "COMPLETED" ? "An administrator checks the repair and confirms it." : undefined },
+  ];
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto max-w-5xl space-y-5">
       <BackLink />
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Repair job</h1>
-          <p className="mt-1 text-sm text-slate-500">
+        <div className="min-w-0">
+          <ReportRef id={job.id} />
+          <h1 className="text-2xl font-bold tracking-tight text-ink-900">{title}</h1>
+          <p className="mt-1 text-[13px] text-ink-500">
             Reported {formatDate(job.createdAt)} · assigned {formatDate(job.assignedAt)}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {attempt !== null && <Badge tone="slate">Attempt {attempt}</Badge>}
-          {r.status !== null && <Badge tone={repairStatusTone[r.status]}>{repairStatusLabel[r.status]}</Badge>}
+        <div className="flex flex-wrap items-center gap-2">
+          <SeverityIndicator level={job.severity.effective} estimated={job.severity.admin === null} />
+          {r.status !== null && <RepairPill status={r.status} attempt={attempt} />}
           {job.status === "COMPLETED" && <Badge tone="green">Confirmed by admin</Badge>}
         </div>
       </div>
@@ -150,108 +164,120 @@ export function EngineerJobDetailPage() {
         </Alert>
       )}
       {notice !== undefined && <Alert tone={notice.tone}>{notice.text}</Alert>}
-      {r.latestFeedback !== null && r.status === "COMPLETED" && (
-        <Alert tone="info">
-          <strong>An administrator asked for more work:</strong> {r.latestFeedback.note}
-          <span className="block text-xs">Reopen the repair to start attempt {(attempt ?? 0) + 1}. You will need new photos for it.</span>
-        </Alert>
+      {r.latestFeedback !== null && r.status === "COMPLETED" && open && (
+        <section className="rounded-xl border border-ink-150 bg-white p-4 shadow-[inset_0_3px_0_var(--color-road-400)]">
+          <h2 className="text-sm font-bold text-ink-900">An administrator asked for more work</h2>
+          <p className="mt-1.5 rounded-lg bg-canvas px-3 py-2 text-sm whitespace-pre-line text-ink-600">{r.latestFeedback.note}</p>
+          <p className="mt-2 text-xs text-ink-500">Reopening starts attempt {(attempt ?? 0) + 1}. You will need new photos for it; earlier photos stay as evidence.</p>
+        </section>
       )}
 
       {open && (
-        <Card title={`Attempt ${attempt ?? "–"}`}>
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-center gap-2">
-              {r.allowedTransitions.includes("WORKING") && r.status === "PENDING" && (
-                <Button loading={busy} onClick={() => void changeStatus("WORKING", "Work started.")}>
+        <section className="rounded-xl border border-ink-150 bg-white p-4 sm:p-5">
+          <h2 className="text-base font-bold text-ink-900">Attempt {attempt ?? "–"}</h2>
+          <ol className="mt-3 space-y-2">
+            {steps.map((step, index) => (
+              <li key={step.label} className="flex items-start gap-2.5 text-sm">
+                <span
+                  className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
+                    step.done ? "bg-ink-900 text-white" : "border-2 border-ink-300 text-ink-500"
+                  }`}
+                  aria-hidden="true"
+                >
+                  {step.done ? <Check className="size-3" strokeWidth={3} /> : index + 1}
+                </span>
+                <span>
+                  <span className={step.done ? "font-semibold text-ink-900" : "font-medium text-ink-600"}>
+                    {step.label}
+                    {step.done && <span className="sr-only"> (done)</span>}
+                  </span>
+                  {step.hint !== undefined && <span className="block text-xs text-ink-500">{step.hint}</span>}
+                </span>
+              </li>
+            ))}
+          </ol>
+
+          <div className="mt-4 space-y-4 border-t border-ink-100 pt-4">
+            {(r.status === "PENDING" || r.status === "WORKING") && (
+              <PhotoUploader label="Repair photos" count={r.currentAttemptPhotoCount} max={r.maxPhotosPerAttempt} onUpload={uploadPhoto} />
+            )}
+            <div className="flex flex-col gap-2 sm:flex-row">
+              {canStart && (
+                <Button size="lg" loading={busy} onClick={() => void changeStatus("WORKING", "Work started.")} className="w-full sm:w-auto">
                   Start work
                 </Button>
               )}
               {canComplete && (
-                <Button loading={busy} disabled={!hasPhoto} onClick={() => void changeStatus("COMPLETED", "Marked as completed. An administrator will check it.")}>
+                <Button
+                  size="lg"
+                  loading={busy}
+                  disabled={!hasPhoto}
+                  onClick={() => void changeStatus("COMPLETED", "Marked as completed. An administrator will check it.")}
+                  className="w-full sm:w-auto"
+                >
                   Mark completed
                 </Button>
               )}
-              {r.allowedTransitions.includes("WORKING") && r.status === "COMPLETED" && (
-                <Button variant="secondary" loading={busy} onClick={() => setConfirmReopen(true)}>
-                  Reopen repair
+              {canReopen && (
+                <Button size="lg" variant={r.latestFeedback !== null ? "primary" : "secondary"} loading={busy} onClick={() => setConfirmReopen(true)} className="w-full sm:w-auto">
+                  Reopen as attempt {(attempt ?? 0) + 1}
                 </Button>
               )}
-              {r.status === "COMPLETED" && r.latestFeedback === null && (
-                <span className="text-sm text-slate-500">Waiting for an administrator to confirm the repair.</span>
-              )}
             </div>
-            {canComplete && !hasPhoto && (
-              <p className="text-sm text-amber-700">Upload at least one photo of this attempt before marking it completed.</p>
-            )}
-            {(r.status === "PENDING" || r.status === "WORKING") && (
-              <PhotoUploader label="Repair photos" count={r.currentAttemptPhotoCount} max={r.maxPhotosPerAttempt} onUpload={uploadPhoto} />
-            )}
+            {canComplete && !hasPhoto && <p className="text-[13px] text-warning-800">Upload at least one photo of this attempt before marking it completed.</p>}
+            {r.status === "COMPLETED" && r.latestFeedback === null && <p className="text-[13px] text-ink-500">Waiting for an administrator to confirm the repair.</p>}
+
             <form onSubmit={(e) => void addNote(e)} className="space-y-2">
-              <label htmlFor={noteId} className="block text-sm font-medium text-slate-700">
-                Progress note
+              <label htmlFor={noteId} className="block text-sm font-semibold text-ink-900">
+                Progress note <span className="font-normal text-ink-500">(optional)</span>
               </label>
-              <textarea
-                id={noteId}
-                value={note}
-                maxLength={1000}
-                rows={2}
-                onChange={(e) => setNote(e.target.value)}
-                className="block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-              />
+              <textarea id={noteId} value={note} maxLength={1000} rows={2} onChange={(e) => setNote(e.target.value)} className={fieldClass} />
               <Button type="submit" variant="secondary" loading={busy} disabled={note.trim() === ""}>
                 Add note
               </Button>
             </form>
           </div>
-        </Card>
+        </section>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-5">
-        <div className="space-y-6 lg:col-span-3">
+      <div className="grid gap-5 lg:grid-cols-5">
+        <div className="space-y-5 lg:col-span-3">
           <Card title="Reported damage">
-            {job.image === null ? <p className="text-sm text-slate-500">No photo.</p> : <ReportPhoto image={job.image} detections={job.analysis.detections} />}
-            {job.description !== null && <p className="mt-4 whitespace-pre-line text-sm text-slate-700">{job.description}</p>}
+            {job.image === null ? <p className="text-sm text-ink-500">No photo.</p> : <ReportPhoto image={job.image} detections={job.analysis.detections} />}
+            {job.analysis.detections.length > 0 && (
+              <ul className="mt-4 divide-y divide-ink-100 text-sm">
+                {job.analysis.detections.map((d) => (
+                  <li key={d.id} className="flex items-center justify-between gap-3 py-2">
+                    <span className="flex items-center gap-2 font-medium text-ink-900">
+                      <span className="size-3 shrink-0 border-[3px] border-ink-900" style={{ backgroundColor: detectionColor(d.className) }} aria-hidden="true" />
+                      {damageClassLabel(d.className)}
+                    </span>
+                    <span className="font-mono text-[13px] text-ink-600">{formatConfidence(d.confidence)} confidence</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {job.description !== null && <p className="mt-4 rounded-lg bg-canvas px-3 py-2.5 text-sm whitespace-pre-line text-ink-600">{job.description}</p>}
+            <div className="mt-3">
+              <SeverityNote />
+            </div>
           </Card>
           <Card title="Repair work" description="All attempts on this job. Earlier attempts are kept as evidence.">
             <RepairAttempts attempts={job.attempts} />
           </Card>
         </div>
-        <div className="space-y-6 lg:col-span-2">
-          <Card title="Severity and damage">
-            <div className="text-sm">
-              {job.severity.effective === null ? (
-                <span className="text-slate-600">Not estimated.</span>
-              ) : (
-                <Badge tone={severityTone[job.severity.effective]}>
-                  {severityLabel[job.severity.effective]}
-                  {job.severity.admin === null ? " (estimated)" : ""}
-                </Badge>
-              )}
-              {job.analysis.detections.length > 0 && (
-                <ul className="mt-3 divide-y divide-slate-100">
-                  {job.analysis.detections.map((d) => (
-                    <li key={d.id} className="flex justify-between py-1.5">
-                      <span>{damageClassLabel(d.className)}</span>
-                      <span className="text-slate-500">{formatConfidence(d.confidence)}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className="mt-3">
-                <SeverityNote />
+        <div className="space-y-5 lg:col-span-2">
+          <Card title="Location" flush>
+            <LocationMap value={{ latitude: job.location.latitude, longitude: job.location.longitude }} className="h-64 rounded-none! border-x-0!" />
+            <div className="space-y-3 px-5 py-4">
+              <div className="font-mono text-[13px] text-ink-600">
+                {job.location.latitude.toFixed(5)}, {job.location.longitude.toFixed(5)}
               </div>
+              <a className={buttonClass("secondary", "lg", "w-full")} href={mapsUrl} target="_blank" rel="noreferrer">
+                <MapPin className="size-4" aria-hidden="true" />
+                Open in OpenStreetMap
+              </a>
             </div>
-          </Card>
-          <Card title="Location">
-            <LocationMap value={{ latitude: job.location.latitude, longitude: job.location.longitude }} className="h-64" />
-            <a
-              className="mt-2 inline-block text-sm font-medium text-blue-700 hover:underline"
-              href={`https://www.openstreetmap.org/?mlat=${job.location.latitude}&mlon=${job.location.longitude}#map=18/${job.location.latitude}/${job.location.longitude}`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Open in OpenStreetMap
-            </a>
           </Card>
         </div>
       </div>
@@ -277,8 +303,9 @@ export function EngineerJobDetailPage() {
 
 function BackLink() {
   return (
-    <Link to="/engineer" className="text-sm font-medium text-blue-600 hover:text-blue-700">
-      ← My jobs
+    <Link to="/engineer" className="-ml-1 inline-flex min-h-9 items-center gap-1 text-sm font-semibold text-cobalt-600 hover:text-cobalt-700">
+      <ChevronLeft className="size-4" aria-hidden="true" />
+      My jobs
     </Link>
   );
 }

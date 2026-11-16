@@ -14,7 +14,7 @@ export function ChangePasswordPage() {
       title="Choose a new password"
       subtitle="Your account was created with a temporary password. Choose your own password to continue."
       footer={
-        <button type="button" onClick={() => void logout()} className="font-semibold text-slate-600 hover:text-slate-900">
+        <button type="button" onClick={() => void logout()} className="font-semibold text-ink-600 hover:text-ink-900">
           Log out
         </button>
       }

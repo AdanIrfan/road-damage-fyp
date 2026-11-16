@@ -1,10 +1,12 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { Phone } from "lucide-react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { Alert, Button, TextField } from "../../components/ui";
 import { AuthLayout } from "../../layouts/AuthLayout";
 import { ApiError, errorMessage, type FieldErrors } from "../../lib/api";
 import { firstError } from "../../utils/format";
 import { authApi } from "./authApi";
+import { OtpInput } from "./OtpInput";
 
 function secondsUntil(iso: string | undefined): number {
   if (iso === undefined) return 0;
@@ -25,6 +27,8 @@ export function VerifyOtpPage() {
   const [notice, setNotice] = useState<string | undefined>(navState?.notice);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [cooldown, setCooldown] = useState(() => secondsUntil(navState?.resendAvailableAt));
+  const codeLabelId = useId();
+  const codeError = firstError(fieldErrors, "code");
 
   useEffect(() => {
     if (cooldown <= 0) return;
@@ -79,7 +83,7 @@ export function VerifyOtpPage() {
       title="Verify your mobile number"
       subtitle="Enter the 6-digit code we sent by SMS. Codes expire after 10 minutes."
       footer={
-        <Link to="/login" className="font-semibold text-blue-600 hover:text-blue-700">
+        <Link to="/login" className="font-semibold text-cobalt-600 hover:text-cobalt-700">
           Back to log in
         </Link>
       }
@@ -91,27 +95,24 @@ export function VerifyOtpPage() {
           label="Mobile number"
           type="tel"
           autoComplete="tel"
+          icon={<Phone className="size-[18px]" />}
           value={mobileNumber}
           onChange={(e) => setMobileNumber(e.target.value)}
           error={firstError(fieldErrors, "mobileNumber")}
           required
         />
-        <TextField
-          label="Verification code"
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          maxLength={6}
-          placeholder="123456"
-          value={code}
-          onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-          error={firstError(fieldErrors, "code")}
-          required
-        />
-        <Button type="submit" loading={submitting} className="w-full" disabled={code.length !== 6}>
+        <div className="space-y-1.5">
+          <p id={codeLabelId} className="text-sm font-semibold text-ink-900">
+            Verification code
+          </p>
+          <OtpInput value={code} onChange={setCode} invalid={codeError !== undefined} labelId={codeLabelId} />
+          {codeError !== undefined && <p className="text-sm text-danger-700">{codeError}</p>}
+        </div>
+        <Button type="submit" size="lg" loading={submitting} className="w-full" disabled={code.length !== 6}>
           Verify
         </Button>
         <Button type="button" variant="secondary" className="w-full" onClick={handleResend} loading={resending} disabled={cooldown > 0 || mobileNumber === ""}>
-          {cooldown > 0 ? `Resend code in ${cooldown}s` : "Resend code"}
+          {cooldown > 0 ? `Resend code in ${cooldown} s` : "Resend code"}
         </Button>
       </form>
     </AuthLayout>

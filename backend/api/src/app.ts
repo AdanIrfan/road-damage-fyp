@@ -3,7 +3,7 @@ import helmet from "helmet";
 import { createCorsMiddleware } from "./middleware/cors.js";
 import { createErrorHandler } from "./middleware/errorHandler.js";
 import { notFoundHandler } from "./middleware/notFound.js";
-import { requestLogger } from "./middleware/requestLogger.js";
+import { requestContext, requestLogger } from "./middleware/requestLogger.js";
 import { createApiRouter, type RouteDependencies } from "./routes/index.js";
 
 export interface AppOptions {
@@ -27,6 +27,8 @@ export function createApp(deps: RouteDependencies, options: AppOptions): Express
 
   app.disable("x-powered-by");
   app.use(helmet());
+  // First, so every later middleware (and every log line) has the request id.
+  app.use(requestContext);
   if (options.logRequests) {
     app.use(requestLogger);
   }

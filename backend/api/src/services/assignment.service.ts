@@ -2,6 +2,7 @@ import type { PrismaClient } from "../db/prisma.js";
 import { HttpError } from "../utils/httpError.js";
 import { reportNotFound, stateConflict, type AdminActionResult, type AdminReportService } from "./adminReport.service.js";
 import type { Clock } from "./clock.js";
+import { notifyAssignment } from "./notificationEvents.js";
 import { canAssign, nextAttempt } from "./reportWorkflow.js";
 
 export interface EngineerSuggestion {
@@ -87,7 +88,7 @@ export function createAssignmentService(deps: { prisma: PrismaClient; adminRepor
         if (updated.count !== 1) {
           throw stateConflict();
         }
-        await tx.reportAssignment.create({
+        const assignment = await tx.reportAssignment.create({
           data: {
             reportId,
             engineerId,
@@ -96,7 +97,9 @@ export function createAssignmentService(deps: { prisma: PrismaClient; adminRepor
             reason: reason?.trim() || null,
             attempt,
           },
+          select: { id: true },
         });
+        await notifyAssignment(tx, { reportId, engineerId, previousEngineerId: report.assignedEngineerId, assignmentId: assignment.id });
       });
       return { report: await adminReports.get(reportId) };
     },

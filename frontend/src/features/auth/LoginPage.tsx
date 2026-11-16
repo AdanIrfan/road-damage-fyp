@@ -1,3 +1,4 @@
+import { Lock, Phone } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { Alert, Button, TextField } from "../../components/ui";
@@ -45,11 +46,11 @@ export function LoginPage() {
   return (
     <AuthLayout
       title="Log in"
-      subtitle="Use the mobile number and password of your account."
+      subtitle="Citizens, engineers and administrators log in with their mobile number and password."
       footer={
         <>
           New citizen?{" "}
-          <Link to="/register" className="font-semibold text-blue-600 hover:text-blue-700">
+          <Link to="/register" className="font-semibold text-cobalt-600 hover:text-cobalt-700">
             Create an account
           </Link>
         </>
@@ -62,7 +63,9 @@ export function LoginPage() {
           label="Mobile number"
           type="tel"
           autoComplete="tel"
-          placeholder="+1 202 555 0143"
+          placeholder="+92 300 1234567"
+          hint="Include your country code."
+          icon={<Phone className="size-[18px]" />}
           value={mobileNumber}
           onChange={(e) => setMobileNumber(e.target.value)}
           error={firstError(fieldErrors, "mobileNumber")}
@@ -72,12 +75,13 @@ export function LoginPage() {
           label="Password"
           type="password"
           autoComplete="current-password"
+          icon={<Lock className="size-[18px]" />}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           error={firstError(fieldErrors, "password")}
           required
         />
-        <Button type="submit" loading={submitting} className="w-full">
+        <Button type="submit" size="lg" loading={submitting} className="w-full">
           Log in
         </Button>
       </form>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Pagination } from "../../components/Pagination";
-import { Alert, Card, Spinner } from "../../components/ui";
+import { History } from "lucide-react";
+import { Alert, EmptyState, PageHeader, SkeletonList } from "../../components/ui";
 import { errorMessage } from "../../lib/api";
 import type { EngineerJobListItem } from "../../lib/reportTypes";
 import type { Paginated } from "../../lib/types";
@@ -34,26 +35,25 @@ export function EngineerHistoryPage() {
   }, [page]);
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-900">Work history</h1>
-        <p className="mt-1 text-sm text-slate-500">Repairs confirmed as completed.</p>
-      </div>
+    <div className="mx-auto max-w-3xl space-y-5">
+      <PageHeader title="Work history" description={jobs === undefined ? "Repairs confirmed as completed." : `${jobs.total} repair${jobs.total === 1 ? "" : "s"} confirmed as completed.`} />
       {error !== undefined && <Alert>{error}</Alert>}
-      <Card>
-        {loading && jobs === undefined ? (
-          <div className="flex justify-center py-10 text-blue-600">
-            <Spinner />
+      {loading && jobs === undefined ? (
+        <div className="rounded-xl border border-ink-150 bg-white p-5">
+          <SkeletonList rows={3} />
+        </div>
+      ) : jobs !== undefined && jobs.items.length === 0 ? (
+        <div className="rounded-xl border border-ink-150 bg-white">
+          <EmptyState icon={<History className="size-6" />} title="No completed jobs yet" description="A job moves here once an administrator confirms your repair." />
+        </div>
+      ) : (
+        jobs !== undefined && (
+          <div className={loading ? "opacity-60" : ""}>
+            <EngineerJobList jobs={jobs.items} history />
           </div>
-        ) : jobs !== undefined && jobs.items.length === 0 ? (
-          <p className="py-10 text-center text-sm text-slate-500">No completed jobs yet.</p>
-        ) : (
-          jobs !== undefined && <EngineerJobList jobs={jobs.items} history />
-        )}
-        {jobs !== undefined && (
-          <Pagination page={jobs.page} pageSize={jobs.pageSize} total={jobs.total} loading={loading} noun="job" onPage={setPage} />
-        )}
-      </Card>
+        )
+      )}
+      {jobs !== undefined && <Pagination page={jobs.page} pageSize={jobs.pageSize} total={jobs.total} loading={loading} noun="job" onPage={setPage} />}
     </div>
   );
 }

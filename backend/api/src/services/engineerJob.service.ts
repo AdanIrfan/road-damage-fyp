@@ -4,6 +4,7 @@ import type { PrismaClient } from "../db/prisma.js";
 import type { AiAnalysisStatus, Prisma, RepairStatus, ReportStatus, SeverityLevel } from "../generated/prisma/client.js";
 import { HttpError } from "../utils/httpError.js";
 import { stateConflict } from "./adminReport.service.js";
+import { notifyRepairStatusChanged } from "./notificationEvents.js";
 import type { Clock } from "./clock.js";
 import { detectImageType } from "./images/detectImageType.js";
 import { createDisplayCopy } from "./images/processImage.js";
@@ -59,6 +60,8 @@ export interface EngineerJobListItem {
   damageClasses: string[];
   /** Admin asked for more work on the current (Completed) attempt. */
   needsMoreWork: boolean;
+  /** Where the job is (the same coordinates the job page shows), for the engineer's own map. */
+  location: { latitude: number; longitude: number };
   image: ReportImageView | null;
 }
 
@@ -120,6 +123,8 @@ const jobListSelect = {
   repairAttempt: true,
   aiSeverity: true,
   adminSeverity: true,
+  latitude: true,
+  longitude: true,
   images: imageSelect,
   detections: { select: { className: true } },
   repairUpdates: { orderBy: { createdAt: "desc" }, take: 1, select: { kind: true, attempt: true } },
@@ -225,9 +230,11 @@ export function createEngineerJobService(deps: { prisma: PrismaClient; storage: 
             throw new HttpError(409, "REPAIR_PHOTO_REQUIRED", "Upload at least one photo of this repair attempt before marking it completed.");
           }
         }
-        await tx.repairUpdate.create({
+        const update = await tx.repairUpdate.create({
           data: { reportId, authorId: engineerId, kind: "STATUS_CHANGE", attempt, fromStatus: from, toStatus: target, note: note?.trim() || null },
+          select: { id: true },
         });
+        await notifyRepairStatusChanged(tx, { reportId, from, to: target, attempt: expectedAttempt, updateId: update.id });
       });
       return load(engineerId, reportId);
     },
@@ -354,6 +361,7 @@ function toJobListItem(row: JobListRow): EngineerJobListItem {
     severity: effectiveSeverity(row.adminSeverity, row.aiSeverity),
     damageClasses: [...new Set(row.detections.map((d) => d.className))].sort(),
     needsMoreWork: needsMoreWorkFlag(row.repairStatus, row.repairAttempt, row.repairUpdates[0]),
+    location: { latitude: row.latitude, longitude: row.longitude },
     image: imageView(row.id, row.images[0]),
   };
 }

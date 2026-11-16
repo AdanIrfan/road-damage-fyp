@@ -1,3 +1,4 @@
+import { logger } from "../utils/logger.js";
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
@@ -237,7 +238,7 @@ export function attachChatGateway(server: Server, deps: ChatGatewayDependencies)
       if (error instanceof HttpError) {
         fail(error.code, error.message);
       } else {
-        console.error("Chat message could not be stored:", error);
+        logger.error("chat_message_store_failed", { userId: connection.user.id, error });
         fail("INTERNAL_ERROR", "Something went wrong. Please try again.");
       }
     }
@@ -267,7 +268,7 @@ export function attachChatGateway(server: Server, deps: ChatGatewayDependencies)
     });
     socket.on("message", (data, isBinary) => {
       onMessage(connection, data, isBinary).catch((error: unknown) => {
-        console.error("Chat message handling failed:", error);
+        logger.error("chat_message_handling_failed", { error });
       });
     });
     socket.on("error", () => {
@@ -294,7 +295,7 @@ export function attachChatGateway(server: Server, deps: ChatGatewayDependencies)
         wss.handleUpgrade(req, socket, head, (ws) => register(ws, auth.user, auth.expiresAtMs));
       })
       .catch((error: unknown) => {
-        console.error("Chat handshake failed:", error);
+        logger.error("chat_handshake_failed", { error });
         rejectHandshake(socket, 503, "SERVICE_UNAVAILABLE", "Chat is temporarily unavailable.");
       });
   };

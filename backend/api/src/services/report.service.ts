@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { PrismaClient } from "../db/prisma.js";
 import type { CaptureMethod, Prisma, ReportStatus } from "../generated/prisma/client.js";
 import { HttpError } from "../utils/httpError.js";
+import { logger } from "../utils/logger.js";
 import { AiServiceError, type AiAnalysis, type AiClient, type AiErrorKind } from "./ai/aiClient.js";
 import type { Clock } from "./clock.js";
 import { detectImageType } from "./images/detectImageType.js";
@@ -16,6 +17,8 @@ import {
   type ReportListItem,
   type ReportView,
 } from "./reportViews.js";
+import { toDetectionRows } from "./analysisRows.js";
+import { notifyReportSubmitted } from "./notificationEvents.js";
 import { estimateSeverity } from "./severity.js";
 import type { FileStorage } from "./storage/fileStorage.js";
 import type { PublicUser } from "./user.service.js";
@@ -95,7 +98,7 @@ export function createReportService(deps: ReportServiceDependencies): ReportServ
     } catch (error) {
       const kind: AiErrorKind = error instanceof AiServiceError ? error.kind : "invalid_response";
       // Never log the image or the coordinates; the kind is enough to diagnose.
-      console.warn(`AI analysis failed (${kind}): ${error instanceof Error ? error.message : "unknown error"}`);
+      logger.warn("ai_analysis_failed", { kind, reason: error instanceof Error ? error.message : "unknown error" });
       return { ok: false, kind };
     }
   };
@@ -138,19 +141,7 @@ export function createReportService(deps: ReportServiceDependencies): ReportServ
         savedKeys.push(displayKey);
 
         const outcome = await analyse(display);
-        const imageArea = display.width * display.height;
-        const detections = outcome.ok
-          ? outcome.analysis.detections.map((d) => ({
-              classId: d.classId,
-              className: d.className,
-              confidence: d.confidence,
-              x1: d.box.x1,
-              y1: d.box.y1,
-              x2: d.box.x2,
-              y2: d.box.y2,
-              areaFraction: Math.min(1, Math.max(0, ((d.box.x2 - d.box.x1) * (d.box.y2 - d.box.y1)) / imageArea)),
-            }))
-          : [];
+        const detections = outcome.ok ? toDetectionRows(outcome.analysis.detections, display.width, display.height) : [];
         const severity = outcome.ok ? estimateSeverity(detections) : null;
 
         const reportId = await prisma.$transaction(async (tx) => {
@@ -198,6 +189,8 @@ export function createReportService(deps: ReportServiceDependencies): ReportServ
               data: detections.map((d) => ({ ...d, reportId: report.id, imageId })),
             });
           }
+          // Same transaction: no notification unless the report is really stored.
+          await notifyReportSubmitted(tx, { reportId: report.id, citizenId, aiFailed: !outcome.ok });
           return report.id;
         });
 

@@ -3,13 +3,14 @@ import type { PrismaClient } from "../db/prisma.js";
 import { deriveKey } from "../utils/crypto.js";
 import { createAdminReportService, type AdminReportService } from "./adminReport.service.js";
 import { createAnalyticsService, type AnalyticsService } from "./analytics.service.js";
-import type { AiClient } from "./ai/aiClient.js";
+import type { AiClient, AiHealth } from "./ai/aiClient.js";
 import { createAssignmentService, type AssignmentService } from "./assignment.service.js";
 import { createAuthService, type AuthService } from "./auth.service.js";
 import { createChatService, type ChatService } from "./chat.service.js";
 import { systemClock, type Clock } from "./clock.js";
 import { createEngineerService, type EngineerService } from "./engineer.service.js";
 import { createEngineerJobService, type EngineerJobService } from "./engineerJob.service.js";
+import { createInAppNotificationService, type InAppNotificationService } from "./inAppNotification.service.js";
 import { createNotificationService } from "./notification.service.js";
 import { createOtpService } from "./otp.service.js";
 import { createReportService, type ReportLocationSettings, type ReportService } from "./report.service.js";
@@ -29,6 +30,10 @@ export interface Services {
   engineerJobs: EngineerJobService;
   chat: ChatService;
   analytics: AnalyticsService;
+  /** In-app notifications (reading side; events are written inside the business transactions). */
+  inAppNotifications: InAppNotificationService;
+  /** Health of the internal AI service, for administrators. */
+  aiHealth: () => Promise<AiHealth>;
   /** Key for signing CSRF tokens (derived from AUTH_SECRET). */
   csrfKey: Buffer;
 }
@@ -55,7 +60,7 @@ export function createServices(deps: ServiceDependencies): Services {
     clock,
   });
   const notifications = createNotificationService(deps.sms);
-  const adminReports = createAdminReportService({ prisma: deps.prisma, notifications, clock });
+  const adminReports = createAdminReportService({ prisma: deps.prisma, notifications, clock, ai: deps.ai, storage: deps.storage });
   const otp = createOtpService({ prisma: deps.prisma, sms: deps.sms, otpKey: deriveKey(deps.authSecret, "otp"), clock });
 
   return {
@@ -69,6 +74,8 @@ export function createServices(deps: ServiceDependencies): Services {
     engineerJobs: createEngineerJobService({ prisma: deps.prisma, storage: deps.storage, clock }),
     chat: createChatService({ prisma: deps.prisma }),
     analytics: createAnalyticsService({ prisma: deps.prisma, clock }),
+    inAppNotifications: createInAppNotificationService({ prisma: deps.prisma, clock }),
+    aiHealth: () => deps.ai.health(),
     csrfKey: deriveKey(deps.authSecret, "csrf"),
   };
 }

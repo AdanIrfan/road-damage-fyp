@@ -67,6 +67,36 @@ export interface AdminAnalytics {
     /** Reports flagged for an admin to check the location (mismatch, no metadata, poor GPS). */
     needsReview: number;
   };
+  /**
+   * How long reports in the range took, measured from submission, using the status history.
+   * Each report counts at most once per measure (its FIRST review, first decision, completion).
+   */
+  turnaround: {
+    /** Submission until an admin started the review. */
+    toReview: TurnaroundStat;
+    /** Submission until the first decision (accepted, rejected or delayed). */
+    toDecision: TurnaroundStat;
+    /** Submission until the repair was confirmed (report completed). */
+    toCompletion: TurnaroundStat;
+  };
+}
+
+export interface TurnaroundStat {
+  /** Reports in the range that reached this point. */
+  reports: number;
+  /** null when no report in the range has reached this point yet. */
+  medianHours: number | null;
+  averageHours: number | null;
+}
+
+function turnaroundStat(hours: number[]): TurnaroundStat {
+  if (hours.length === 0) return { reports: 0, medianHours: null, averageHours: null };
+  const sorted = [...hours].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 === 1 ? (sorted[middle] ?? 0) : ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2;
+  const average = sorted.reduce((sum, value) => sum + value, 0) / sorted.length;
+  const round = (value: number) => Math.round(value * 10) / 10;
+  return { reports: sorted.length, medianHours: round(median), averageHours: round(average) };
 }
 
 export interface AnalyticsService {
@@ -257,6 +287,28 @@ export function createAnalyticsService(deps: { prisma: PrismaClient; clock: () =
         }
       }
 
+      // Turnaround: the first time each report reached review, a decision and completion.
+      const transitions = await prisma.reportStatusHistory.findMany({
+        where: { report: inRange, toStatus: { in: ["UNDER_REVIEW", "ACCEPTED", "REJECTED", "DELAYED", "COMPLETED"] } },
+        select: { reportId: true, fromStatus: true, toStatus: true, createdAt: true, report: { select: { createdAt: true } } },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      });
+      const seen = { review: new Set<string>(), decision: new Set<string>(), completion: new Set<string>() };
+      const hours = { review: [] as number[], decision: [] as number[], completion: [] as number[] };
+      for (const row of transitions) {
+        // "Keep delayed" (DELAYED to DELAYED) is not a new decision.
+        if (row.fromStatus === row.toStatus) continue;
+        const measure = row.toStatus === "UNDER_REVIEW" ? "review" : row.toStatus === "COMPLETED" ? "completion" : "decision";
+        if (seen[measure].has(row.reportId)) continue;
+        seen[measure].add(row.reportId);
+        hours[measure].push(Math.max(0, row.createdAt.getTime() - row.report.createdAt.getTime()) / 3_600_000);
+      }
+      const turnaround = {
+        toReview: turnaroundStat(hours.review),
+        toDecision: turnaroundStat(hours.decision),
+        toCompletion: turnaroundStat(hours.completion),
+      };
+
       return {
         range: { from: query.from ?? null, to: query.to ?? null, granularity },
         total,
@@ -267,6 +319,7 @@ export function createAnalyticsService(deps: { prisma: PrismaClient; clock: () =
         repairProgress,
         engineerWorkload,
         location: { byStatus: [...locationMap.values()], needsReview },
+        turnaround,
       };
     },
   };

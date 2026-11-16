@@ -8,7 +8,7 @@ A Final Year Project web application that connects three groups:
 
 A YOLOv8 model, already trained on the RDD2022 road damage dataset, analyses each uploaded photograph. It returns the damage class, a confidence score and bounding boxes, which the system uses to make an initial severity estimate.
 
-> **Project status:** Phase 5 — authentication (Phase 2), citizen reporting with AI analysis (Stage 3), the admin and engineer workflows (Stage 4) and **admin–engineer chat and admin analytics** (Phase 5) are implemented. Priority, duplicate detection, admin/engineer notifications and a real SMS provider are **not implemented**. See [What works today](#what-works-today) and [Known limitations](#known-limitations).
+> **Project status:** Phase 6 (in progress, not yet committed) — on top of Phases 2–5 the whole frontend has been redesigned ("Civic Ink"), with a public landing page, persistent **in-app notifications for citizens, administrators and engineers**, an AI service status indicator, overview maps and analytics CSV export. Priority, model evaluation and a real SMS provider are **not implemented**. See [What works today](#what-works-today) and [Known limitations](#known-limitations).
 
 ## Purpose
 
@@ -94,6 +94,16 @@ The main backend calls the AI service over an internal URL (`AI_SERVICE_URL`) wi
 
 - **Chat (Messages page):** private one-to-one conversations between an admin and an engineer. Each admin–engineer pair has its own conversation; another admin or engineer cannot see it. Messages appear on the other side immediately (WebSocket), are stored in PostgreSQL, and the history stays after a refresh or reconnect. Plain text only, up to 2,000 characters, 30 messages per minute per user. If the connection drops, the page reconnects by itself, sends anything typed during the outage, and loads messages that were missed. Admins can also open a chat from an engineer's page. Citizens have no chat. There are no read receipts, typing indicators, attachments or unread counts (not in scope).
 - **Analytics (admin):** charts of reports submitted over time, reports by status, by estimated severity (admin correction where set), damage types detected, repair progress, engineer workload and location verification results, for a chosen period (7 / 30 / 90 days, 12 months, all time or custom dates). Every number comes from the stored reports; each report is counted once, so reassignments and repeated repair attempts do not inflate the figures.
+
+**Redesign, notifications and web improvements (Phase 6):**
+
+- **New interface for all three roles:** dark sidebar on desktop and a bottom tab bar on phones; report reference numbers such as `RD-7F3A2C` (for display only); a progress stepper from Submitted to Completed; distinct indicators for report status, repair status and severity.
+- **Public landing page** at `/` for visitors; login, registration and SMS-code pages redesigned (six-box code entry, show/hide password).
+- **Citizens:** report cards with photo thumbnails, a list/map switch for their own reports, a three-step submission wizard (method → photo and location → review), and an explanation of how the estimated severity was calculated.
+- **Administrators:** operations dashboard (pipeline, map, items needing attention), quick views on the report list, a report page whose actions stay visible while scrolling, an overview map, analytics KPIs and **CSV export**, and an indicator showing whether the AI service is online with its model loaded.
+- **Engineers:** phone-first job cards with one clear next action and a guided checklist per repair attempt.
+- **Operations extras:** sort reports by highest severity or longest waiting; a non-blocking hint when another report was submitted within 50 m and 30 days (nothing is merged or rejected automatically); turnaround times in analytics; a "Retry analysis" button for reports whose automatic analysis failed (it never changes the status or the administrator's severity); a map of their own jobs for engineers; structured JSON logs with a request id on every response.
+- **In-app notifications:** a bell with an unread count for every role; notifications are stored in the database, lead to the relevant report, job or conversation, and can be marked read one by one or all at once. Chat produces one notification per conversation, not one per message.
 
 ## Feature plan
 

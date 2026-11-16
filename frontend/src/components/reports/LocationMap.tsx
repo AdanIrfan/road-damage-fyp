@@ -49,7 +49,7 @@ export function LocationMap({ value, onChange, accuracyMeters, comparison, class
 
   return (
     <div className="space-y-2">
-      <div className={`overflow-hidden rounded-lg border border-slate-200 ${className}`}>
+      <div className={`overflow-hidden rounded-lg border border-ink-150 ${className}`}>
         <MapContainer
           center={value === null ? WORLD_VIEW.center : [value.latitude, value.longitude]}
           zoom={value === null ? WORLD_VIEW.zoom : PICKED_ZOOM}
@@ -85,14 +85,14 @@ export function LocationMap({ value, onChange, accuracyMeters, comparison, class
         </MapContainer>
       </div>
       {tiles.failed > 0 && tiles.loaded === 0 && (
-        <p className="text-sm text-amber-700">
+        <p className="text-sm text-warning-800">
           The map background could not be loaded from OpenStreetMap (no internet connection, or the tile server is blocked by a
           network filter or browser extension). The location marker is still correct.
         </p>
       )}
       {editable && (
         <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-          <span className="text-slate-500">
+          <span className="text-ink-500">
             {value === null
               ? "Click on the map where the damage is."
               : `Selected: ${value.latitude.toFixed(5)}, ${value.longitude.toFixed(5)}`}
@@ -102,7 +102,7 @@ export function LocationMap({ value, onChange, accuracyMeters, comparison, class
           </Button>
         </div>
       )}
-      {locateError !== undefined && <p className="text-sm text-amber-700">{locateError}</p>}
+      {locateError !== undefined && <p className="text-sm text-warning-800">{locateError}</p>}
     </div>
   );
 }

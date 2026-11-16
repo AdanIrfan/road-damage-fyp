@@ -8,6 +8,7 @@ import { createHttpAiClient, unconfiguredAiClient } from "./services/ai/aiClient
 import { createServices } from "./services/index.js";
 import { createSmsSender } from "./services/sms/index.js";
 import { createLocalFileStorage } from "./services/storage/fileStorage.js";
+import { logger } from "./utils/logger.js";
 
 /** Force the process to exit if a graceful shutdown takes longer than this. */
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -67,12 +68,15 @@ async function main(): Promise<void> {
     throw error;
   }
 
-  console.log(`API listening on http://localhost:${env.port} (${env.nodeEnv})`);
-  console.log(`CORS allowed origins: ${env.corsOrigins.join(", ")}`);
-  // Only the origin of the AI service is logged; the secret never is.
-  console.log(`AI service: ${env.ai === undefined ? "NOT CONFIGURED (analyses will fail)" : new URL(env.ai.url).origin}`);
+  logger.info("server_started", {
+    url: `http://localhost:${env.port}`,
+    environment: env.nodeEnv,
+    corsOrigins: env.corsOrigins,
+    // Only the origin of the AI service is logged; the secret never is.
+    aiService: env.ai === undefined ? "not configured (analyses will fail)" : new URL(env.ai.url).origin,
+  });
   if (sms.providerName === "mock") {
-    console.warn("SMS_PROVIDER=mock: SMS messages are NOT delivered; codes are printed to this console.");
+    logger.warn("sms_mock_in_use", { note: "SMS messages are NOT delivered; codes are printed to this console." });
   }
   registerShutdownHandlers(server, prisma, chatGateway);
 }
@@ -95,10 +99,10 @@ function registerShutdownHandlers(server: Server, prisma: PrismaClient, chatGate
       return;
     }
     shuttingDown = true;
-    console.log(`${signal} received, shutting down...`);
+    logger.info("shutdown_started", { signal });
 
     const forceExit = setTimeout(() => {
-      console.error("Shutdown timed out; forcing exit.");
+      logger.error("shutdown_timed_out");
       process.exit(1);
     }, SHUTDOWN_TIMEOUT_MS);
     forceExit.unref();
@@ -110,15 +114,15 @@ function registerShutdownHandlers(server: Server, prisma: PrismaClient, chatGate
       prisma
         .$disconnect()
         .catch((disconnectError: unknown) => {
-          console.error("Error while disconnecting Prisma:", disconnectError);
+          logger.error("prisma_disconnect_failed", { error: disconnectError });
           process.exitCode = 1;
         })
         .finally(() => {
           if (closeError !== undefined) {
-            console.error("Error while closing the HTTP server:", closeError);
+            logger.error("http_server_close_failed", { error: closeError });
             process.exitCode = 1;
           }
-          console.log("Shutdown complete.");
+          logger.info("shutdown_complete");
           clearTimeout(forceExit);
         });
     });
@@ -134,7 +138,7 @@ main().catch((error: unknown) => {
   if (error instanceof EnvValidationError) {
     console.error(error.message);
   } else {
-    console.error("Failed to start the API server:", error);
+    logger.error("server_start_failed", { error });
   }
   process.exitCode = 1;
 });

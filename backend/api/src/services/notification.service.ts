@@ -1,4 +1,5 @@
 import { SMS_REASON_MAX_LENGTH } from "../config/workflow.js";
+import { logger } from "../utils/logger.js";
 import { maskMobileNumber } from "../utils/phone.js";
 import type { SmsSender } from "./sms/index.js";
 
@@ -54,11 +55,12 @@ export function createNotificationService(sms: SmsSender): NotificationService {
         await sms.send(input.citizenMobile, citizenStatusMessage(input));
         return "sent";
       } catch (error) {
-        console.warn(
-          `SMS notification failed (event ${input.status}, report ${input.reportId}, to ${maskMobileNumber(input.citizenMobile)}): ${
-            error instanceof Error ? error.message : "unknown error"
-          }`,
-        );
+        logger.warn("citizen_sms_failed", {
+          status: input.status,
+          reportId: input.reportId,
+          to: maskMobileNumber(input.citizenMobile),
+          reason: error instanceof Error ? error.message : "unknown error",
+        });
         return "failed";
       }
     },

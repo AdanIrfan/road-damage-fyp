@@ -2,6 +2,7 @@ import { CHAT_HISTORY_DEFAULT_LIMIT } from "../config/chat.js";
 import type { PrismaClient } from "../db/prisma.js";
 import { Prisma, type AccountStatus, type UserRole } from "../generated/prisma/client.js";
 import { HttpError } from "../utils/httpError.js";
+import { notifyChatMessage } from "./notificationEvents.js";
 
 /**
  * Admin–engineer chat (Phase 5).
@@ -283,6 +284,14 @@ export function createChatService(deps: { prisma: PrismaClient }): ChatService {
           await tx.conversation.updateMany({
             where: { id: conversation.id, OR: [{ lastMessageAt: null }, { lastMessageAt: { lt: created.createdAt } }] },
             data: { lastMessageAt: created.createdAt },
+          });
+          // One notification row per recipient per conversation (refreshed, not multiplied).
+          await notifyChatMessage(tx, {
+            conversationId: conversation.id,
+            senderId: user.id,
+            recipientId,
+            body: input.body,
+            sentAt: created.createdAt,
           });
           return created;
         });

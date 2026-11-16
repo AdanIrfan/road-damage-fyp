@@ -2,6 +2,7 @@ import type { ErrorRequestHandler } from "express";
 import type { ApiErrorDetails } from "../types/api.js";
 import { sendError } from "../utils/apiResponse.js";
 import { HttpError } from "../utils/httpError.js";
+import { logger } from "../utils/logger.js";
 
 export interface ErrorHandlerOptions {
   /** Include stack traces in 5xx responses. Must only be true in development. */
@@ -23,7 +24,7 @@ const INTERNAL_ERROR: NormalizedError = {
 
 /** Central error handler. Must be registered after all routes. */
 export function createErrorHandler(options: ErrorHandlerOptions): ErrorRequestHandler {
-  return (err: unknown, _req, res, next) => {
+  return (err: unknown, req, res, next) => {
     // If the response has already started, let Express close the connection.
     if (res.headersSent) {
       next(err);
@@ -34,7 +35,13 @@ export function createErrorHandler(options: ErrorHandlerOptions): ErrorRequestHa
 
     // Log server errors in full on the server; clients only get the safe message.
     if (normalized.statusCode >= 500) {
-      console.error(err);
+      logger.error("request_failed", {
+        method: req.method,
+        path: req.originalUrl.split("?")[0],
+        status: normalized.statusCode,
+        code: normalized.code,
+        error: err,
+      });
     }
 
     const details: ApiErrorDetails = { code: normalized.code, message: normalized.message };

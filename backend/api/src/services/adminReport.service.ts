@@ -1,4 +1,10 @@
-import { ADMIN_DASHBOARD_RECENT_COUNT } from "../config/workflow.js";
+import {
+  ADMIN_DASHBOARD_RECENT_COUNT,
+  ADMIN_MAP_MAX_POINTS,
+  DUPLICATE_HINT_MAX_RESULTS,
+  DUPLICATE_HINT_RADIUS_METERS,
+  DUPLICATE_HINT_WINDOW_DAYS,
+} from "../config/workflow.js";
 import type { PrismaClient } from "../db/prisma.js";
 import type {
   AccountStatus,
@@ -12,8 +18,15 @@ import type {
   UserRole,
 } from "../generated/prisma/client.js";
 import { HttpError } from "../utils/httpError.js";
+import { logger } from "../utils/logger.js";
+import { AiServiceError, type AiClient, type AiErrorKind } from "./ai/aiClient.js";
+import { toDetectionRows } from "./analysisRows.js";
+import { haversineMeters } from "./location/haversine.js";
+import { estimateSeverity } from "./severity.js";
+import type { FileStorage } from "./storage/fileStorage.js";
 import type { Clock } from "./clock.js";
 import type { CitizenNotifiedStatus, NotificationOutcome, NotificationService } from "./notification.service.js";
+import { notifyRepairConfirmed, notifyReportDecision, notifyReworkRequested } from "./notificationEvents.js";
 import {
   assignmentHistorySelect,
   buildRepairAttempts,
@@ -47,6 +60,8 @@ export interface AdminAllowedActions {
   /** "Needs more work" — only while the current attempt is Completed and awaiting confirmation. */
   feedback: boolean;
   confirmCompletion: boolean;
+  /** The automatic analysis failed and can be run again. */
+  retryAnalysis: boolean;
 }
 
 export interface AdminReportView {
@@ -121,7 +136,7 @@ export interface AdminReportListItem {
   citizen: PersonRef;
   severity: { ai: SeverityLevel | null; admin: SeverityLevel | null; effective: SeverityLevel | null };
   analysis: { status: AiAnalysisStatus; detectionCount: number; damageClasses: string[] };
-  location: { verificationStatus: LocationVerificationStatus; needsReview: boolean };
+  location: { verificationStatus: LocationVerificationStatus; needsReview: boolean; latitude: number; longitude: number };
   assignment: { engineer: PersonRef | null; repairStatus: RepairStatus | null; currentAttempt: number | null };
   image: ReportImageView | null;
 }
@@ -129,7 +144,14 @@ export interface AdminReportListItem {
 export interface AdminReportListQuery {
   page: number;
   pageSize: number;
-  sort: "newest" | "oldest";
+  /**
+   * newest / oldest: by submission date.
+   * severity: highest effective severity first (admin correction, else the estimate), then the
+   *           longest waiting within each level; reports without a severity come last.
+   * waiting:  longest waiting first. Without a status filter only reports that are still open
+   *           (submitted, under review, delayed, accepted) are listed.
+   */
+  sort: "newest" | "oldest" | "severity" | "waiting";
   search?: string | undefined;
   status?: ReportStatus | undefined;
   severity?: SeverityLevel | undefined;
@@ -172,10 +194,37 @@ export interface AdminActionResult {
   notification?: NotificationOutcome;
 }
 
+export interface PossibleDuplicates {
+  /** The rule that was applied, so the interface can explain the hint. */
+  criteria: { radiusMeters: number; windowDays: number };
+  matches: (AdminReportListItem & { distanceMeters: number })[];
+}
+
+export interface RetryAnalysisResult {
+  report: AdminReportView;
+  /** completed: detections and estimate are now stored. failed: the report is unchanged apart from the latest error. */
+  analysis: "completed" | "failed";
+}
+
 export interface AdminReportService {
   list(query: AdminReportListQuery): Promise<{ items: AdminReportListItem[]; page: number; pageSize: number; total: number }>;
+  /**
+   * Reports for the admin overview map: the same filters as the list, newest first, capped at
+   * ADMIN_MAP_MAX_POINTS. `truncated` tells the admin when more reports match than are shown.
+   */
+  mapPoints(query: AdminReportListQuery): Promise<{ points: AdminReportListItem[]; total: number; truncated: boolean }>;
   /** Read-only: opening a report never changes its status. */
   get(reportId: string): Promise<AdminReportView>;
+  /**
+   * Other reports close to this one in place and time. Read-only and advisory: reports are never
+   * merged, rejected or blocked because of it.
+   */
+  possibleDuplicates(reportId: string): Promise<PossibleDuplicates>;
+  /**
+   * Runs the automatic analysis again for a report whose analysis FAILED. Only the ai_* fields
+   * and detections are written; the status, the admin's severity and every decision are untouched.
+   */
+  retryAnalysis(adminId: string, reportId: string): Promise<RetryAnalysisResult>;
   dashboard(): Promise<AdminDashboard>;
   review(adminId: string, reportId: string): Promise<AdminActionResult>;
   decide(adminId: string, reportId: string, input: { decision: Decision; reason?: string | undefined }): Promise<AdminActionResult>;
@@ -255,6 +304,8 @@ const adminListSelect = {
   aiStatus: true,
   locationStatus: true,
   locationNeedsReview: true,
+  latitude: true,
+  longitude: true,
   repairStatus: true,
   repairAttempt: true,
   citizen: person,
@@ -283,8 +334,12 @@ export function createAdminReportService(deps: {
   prisma: PrismaClient;
   notifications: NotificationService;
   clock: Clock;
+  ai: AiClient;
+  storage: FileStorage;
 }): AdminReportService {
-  const { prisma, notifications, clock } = deps;
+  const { prisma, notifications, clock, ai, storage } = deps;
+  /** Reports being re-analysed right now (this process): a second click is refused, not queued. */
+  const retrying = new Set<string>();
 
   const load = async (reportId: string): Promise<AdminReportView> => {
     const row = await prisma.report.findUnique({ where: { id: reportId }, select: adminDetailSelect });
@@ -298,7 +353,7 @@ export function createAdminReportService(deps: {
   const current = async (reportId: string) => {
     const row = await prisma.report.findUnique({
       where: { id: reportId },
-      select: { status: true, repairStatus: true, repairAttempt: true, citizen: { select: { mobileNumber: true } } },
+      select: { status: true, repairStatus: true, repairAttempt: true, citizenId: true, assignedEngineerId: true, citizen: { select: { mobileNumber: true } } },
     });
     if (row === null) {
       throw reportNotFound();
@@ -319,9 +374,48 @@ export function createAdminReportService(deps: {
     return notifications.notifyCitizenStatus({ reportId, citizenMobile, status: to as CitizenNotifiedStatus, reason });
   };
 
+  /**
+   * Highest effective severity first. The effective severity (admin correction, else the estimate)
+   * is not a column, so the list is read as four consecutive groups (HIGH, MEDIUM, LOW, none),
+   * each ordered by longest waiting, and the requested page is cut out of that sequence. Only the
+   * Prisma query API is used, so the configured schema is respected.
+   */
+  const listBySeverity = async (query: AdminReportListQuery) => {
+    const filters = buildListWhere(query);
+    const groups: Prisma.ReportWhereInput[] = [
+      { AND: [filters, severityWhere("HIGH")] },
+      { AND: [filters, severityWhere("MEDIUM")] },
+      { AND: [filters, severityWhere("LOW")] },
+      { AND: [filters, { adminSeverity: null, aiSeverity: null }] },
+    ];
+    const counts = await Promise.all(groups.map((where) => prisma.report.count({ where })));
+    const total = counts.reduce((sum, count) => sum + count, 0);
+    let skip = (query.page - 1) * query.pageSize;
+    let remaining = query.pageSize;
+    const rows: AdminListRow[] = [];
+    for (const [index, where] of groups.entries()) {
+      const count = counts[index] ?? 0;
+      if (remaining === 0) break;
+      if (skip >= count) {
+        skip -= count;
+        continue;
+      }
+      const part = await prisma.report.findMany({ where, select: adminListSelect, orderBy: [{ createdAt: "asc" }, { id: "asc" }], skip, take: remaining });
+      rows.push(...part);
+      remaining -= part.length;
+      skip = 0;
+    }
+    return { items: rows.map(toAdminListItem), page: query.page, pageSize: query.pageSize, total };
+  };
+
   return {
     list: async (query) => {
-      const where = buildListWhere(query);
+      if (query.sort === "severity") {
+        return listBySeverity(query);
+      }
+      const filters = buildListWhere(query);
+      const where: Prisma.ReportWhereInput =
+        query.sort === "waiting" && query.status === undefined ? { AND: [filters, { status: { in: [...OPEN_STATUSES] } }] } : filters;
       // Not an array $transaction: inside one, Prisma 7 loads relations in parallel on a single pg
       // connection (pg 8.23 deprecation, an error in pg 9). READ COMMITTED gives no snapshot anyway.
       const [rows, total] = await Promise.all([
@@ -337,7 +431,115 @@ export function createAdminReportService(deps: {
       return { items: rows.map(toAdminListItem), page: query.page, pageSize: query.pageSize, total };
     },
 
+    mapPoints: async (query) => {
+      const where = buildListWhere(query);
+      const [rows, total] = await Promise.all([
+        prisma.report.findMany({ where, select: adminListSelect, orderBy: [{ createdAt: "desc" }, { id: "asc" }], take: ADMIN_MAP_MAX_POINTS }),
+        prisma.report.count({ where }),
+      ]);
+      return { points: rows.map(toAdminListItem), total, truncated: total > rows.length };
+    },
+
     get: load,
+
+    possibleDuplicates: async (reportId) => {
+      const report = await prisma.report.findUnique({ where: { id: reportId }, select: { latitude: true, longitude: true, createdAt: true } });
+      if (report === null) {
+        throw reportNotFound();
+      }
+      const origin = { latitude: report.latitude, longitude: report.longitude };
+      // A bounding box narrows the candidates in the database; the exact distance is checked below.
+      const latitudeMargin = DUPLICATE_HINT_RADIUS_METERS / 111_320;
+      const longitudeMargin = latitudeMargin / Math.max(0.01, Math.cos((origin.latitude * Math.PI) / 180));
+      const windowMs = DUPLICATE_HINT_WINDOW_DAYS * 86_400_000;
+      const candidates = await prisma.report.findMany({
+        where: {
+          id: { not: reportId },
+          latitude: { gte: origin.latitude - latitudeMargin, lte: origin.latitude + latitudeMargin },
+          longitude: { gte: origin.longitude - longitudeMargin, lte: origin.longitude + longitudeMargin },
+          createdAt: { gte: new Date(report.createdAt.getTime() - windowMs), lte: new Date(report.createdAt.getTime() + windowMs) },
+        },
+        select: adminListSelect,
+        orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+        take: 200,
+      });
+      const matches = candidates
+        .map((row) => ({ ...toAdminListItem(row), distanceMeters: haversineMeters(origin, { latitude: row.latitude, longitude: row.longitude }) }))
+        .filter((match) => match.distanceMeters <= DUPLICATE_HINT_RADIUS_METERS)
+        .sort((a, b) => a.distanceMeters - b.distanceMeters)
+        .slice(0, DUPLICATE_HINT_MAX_RESULTS);
+      return { criteria: { radiusMeters: DUPLICATE_HINT_RADIUS_METERS, windowDays: DUPLICATE_HINT_WINDOW_DAYS }, matches };
+    },
+
+    retryAnalysis: async (adminId, reportId) => {
+      const report = await prisma.report.findUnique({
+        where: { id: reportId },
+        select: { aiStatus: true, aiErrorCode: true, images: { select: { id: true, displayKey: true, width: true, height: true }, take: 1 } },
+      });
+      if (report === null) {
+        throw reportNotFound();
+      }
+      if (report.aiStatus !== "FAILED") {
+        throw new HttpError(409, "ANALYSIS_NOT_RETRYABLE", "Only a report whose automatic analysis failed can be analysed again.");
+      }
+      const image = report.images[0];
+      if (image === undefined) {
+        throw new HttpError(409, "ANALYSIS_NOT_RETRYABLE", "This report has no photo to analyse.");
+      }
+      if (retrying.has(reportId)) {
+        throw new HttpError(409, "ANALYSIS_IN_PROGRESS", "This report is already being analysed. Please wait.");
+      }
+      retrying.add(reportId);
+      try {
+        let failure: AiErrorKind | undefined;
+        let analysis: Awaited<ReturnType<AiClient["analyze"]>> | undefined;
+        try {
+          // The same metadata-free display copy that was sent at submission.
+          analysis = await ai.analyze(await storage.read(image.displayKey), "image/jpeg");
+          if (analysis.image.width !== image.width || analysis.image.height !== image.height) {
+            throw new AiServiceError("invalid_response", "AI service analysed an image of a different size");
+          }
+        } catch (error) {
+          failure = error instanceof AiServiceError ? error.kind : "invalid_response";
+        }
+
+        if (analysis === undefined || failure !== undefined) {
+          // Still failed: remember the latest reason. Nothing else about the report changes.
+          await prisma.report.updateMany({ where: { id: reportId, aiStatus: "FAILED" }, data: { aiErrorCode: failure ?? "invalid_response" } });
+          logger.warn("ai_analysis_retry", { reportId, adminId, outcome: "failed", kind: failure, previousError: report.aiErrorCode });
+          return { report: await load(reportId), analysis: "failed" };
+        }
+
+        const result = analysis;
+        const detections = toDetectionRows(result.detections, image.width, image.height);
+        const severity = estimateSeverity(detections);
+        await prisma.$transaction(async (tx) => {
+          // Only while it is still FAILED: a concurrent retry (another server process) matches 0 rows.
+          const updated = await tx.report.updateMany({
+            where: { id: reportId, aiStatus: "FAILED" },
+            data: {
+              aiStatus: "COMPLETED",
+              aiErrorCode: null,
+              aiModel: result.model.name,
+              aiAnalyzedAt: clock(),
+              // Only the automatic estimate. admin_severity and the report status are never touched here.
+              aiSeverity: severity.level,
+              aiSeverityScore: severity.level === null ? null : severity.score,
+            },
+          });
+          if (updated.count !== 1) {
+            throw stateConflict();
+          }
+          if (detections.length > 0) {
+            await tx.aiDetection.createMany({ data: detections.map((d) => ({ ...d, reportId, imageId: image.id })) });
+          }
+        });
+        logger.info("ai_analysis_retry", { reportId, adminId, outcome: "completed", detections: detections.length, previousError: report.aiErrorCode });
+        return { report: await load(reportId), analysis: "completed" };
+      } finally {
+        retrying.delete(reportId);
+      }
+    },
 
     dashboard: async () => {
       const [statusGroups, severityGroups, queueCounts, activeEngineers, recentRows] = await Promise.all([
@@ -431,9 +633,11 @@ export function createAdminReportService(deps: {
         if (updated.count !== 1) {
           throw stateConflict();
         }
-        await tx.reportStatusHistory.create({
+        const history = await tx.reportStatusHistory.create({
           data: { reportId, fromStatus: from, toStatus: to, changedById: adminId, note: note ?? null },
+          select: { id: true },
         });
+        await notifyReportDecision(tx, { reportId, citizenId: state.citizenId, from, to, reason: note, historyId: history.id });
       });
       // Only after the commit, and only by the request whose update matched (no duplicates).
       const notification = await notify(reportId, state.citizen.mobileNumber, from, to, note);
@@ -467,9 +671,11 @@ export function createAdminReportService(deps: {
         if (locked.count !== 1) {
           throw stateConflict();
         }
-        await tx.repairUpdate.create({
+        const update = await tx.repairUpdate.create({
           data: { reportId, authorId: adminId, kind: "ADMIN_FEEDBACK", attempt: expectedAttempt, note: note.trim() },
+          select: { id: true },
         });
+        await notifyReworkRequested(tx, { reportId, engineerId: state.assignedEngineerId, note: note.trim(), updateId: update.id });
       });
       return { report: await load(reportId) };
     },
@@ -491,7 +697,7 @@ export function createAdminReportService(deps: {
           throw stateConflict();
         }
         const extra = note?.trim();
-        await tx.reportStatusHistory.create({
+        const history = await tx.reportStatusHistory.create({
           data: {
             reportId,
             fromStatus: "ACCEPTED",
@@ -499,6 +705,14 @@ export function createAdminReportService(deps: {
             changedById: adminId,
             note: `Repair attempt ${expectedAttempt} confirmed.${extra ? ` ${extra}` : ""}`,
           },
+          select: { id: true },
+        });
+        await notifyRepairConfirmed(tx, {
+          reportId,
+          citizenId: state.citizenId,
+          engineerId: state.assignedEngineerId,
+          attempt: expectedAttempt,
+          historyId: history.id,
         });
       });
       const notification = await notify(reportId, state.citizen.mobileNumber, "ACCEPTED", "COMPLETED", null);
@@ -569,7 +783,7 @@ function toAdminListItem(row: AdminListRow): AdminReportListItem {
       detectionCount: row.detections.length,
       damageClasses: [...new Set(row.detections.map((d) => d.className))].sort(),
     },
-    location: { verificationStatus: row.locationStatus, needsReview: row.locationNeedsReview },
+    location: { verificationStatus: row.locationStatus, needsReview: row.locationNeedsReview, latitude: row.latitude, longitude: row.longitude },
     assignment: { engineer: row.assignedEngineer, repairStatus: row.repairStatus, currentAttempt: row.repairAttempt },
     image: imageView(row.id, row.images[0]),
   };
@@ -629,6 +843,7 @@ function toAdminView(row: AdminDetailRow): AdminReportView {
       assign: canAssign(row.status),
       feedback: awaiting,
       confirmCompletion: awaiting,
+      retryAnalysis: row.aiStatus === "FAILED",
     },
   };
 }

@@ -6,6 +6,7 @@ import { createAuthController } from "../../controllers/auth.controller.js";
 import { createChatController } from "../../controllers/chat.controller.js";
 import { createEngineerJobsController } from "../../controllers/engineerJobs.controller.js";
 import { createEngineersController } from "../../controllers/engineers.controller.js";
+import { createNotificationsController } from "../../controllers/notifications.controller.js";
 import { createProfileController } from "../../controllers/profile.controller.js";
 import { createReportsController } from "../../controllers/reports.controller.js";
 import { createAuthenticate, requirePasswordChanged, requireRole } from "../../middleware/auth.js";
@@ -13,6 +14,7 @@ import { createCsrf } from "../../middleware/csrf.js";
 import { createAuthRateLimiters, createRepairPhotoRateLimiter, createReportRateLimiter } from "../../middleware/rateLimit.js";
 import { uploadReportImage } from "../../middleware/upload.js";
 import type { Services } from "../../services/index.js";
+import { sendSuccess } from "../../utils/apiResponse.js";
 import type { CookieSettings } from "../../utils/authCookies.js";
 
 export interface V1Dependencies {
@@ -31,6 +33,8 @@ export interface V1Dependencies {
  * Citizens:                       /reports (submit, list, summary, detail), /reports/:id/images/:imageId
  * Engineers:                      /engineer/summary, /engineer/jobs... (own jobs only), report images + repair photos of own jobs
  * Admin only:                     /admin/engineers..., /admin/dashboard, /admin/analytics, /admin/reports... (+ any report image)
+ * Admin only (operations):        /admin/system-status (AI service health), /admin/reports/map
+ * Logged in (any role):           /notifications (own rows only: list, unread-count, read, read-all)
  * Admins and engineers:           /chat/contacts, /chat/conversations... (history; sending is over the
  *                                 WebSocket at /api/v1/chat/ws, see realtime/chatGateway.ts)
  *
@@ -57,6 +61,7 @@ export function createV1Router(deps?: V1Dependencies): Router {
   const repairPhotoLimit = createRepairPhotoRateLimiter(deps.rateLimiting);
   const chat = createChatController({ chat: services.chat });
   const analytics = createAnalyticsController({ analytics: services.analytics });
+  const notifications = createNotificationsController({ notifications: services.inAppNotifications });
 
   router.use(cookieParser());
   // Every state-changing /api/v1 request needs a valid CSRF token (including login).
@@ -91,8 +96,15 @@ export function createV1Router(deps?: V1Dependencies): Router {
   adminRouter.patch("/engineers/:id/status", engineers.setStatus);
   adminRouter.get("/dashboard", adminReports.dashboard);
   adminRouter.get("/analytics", analytics.get);
+  adminRouter.get("/system-status", async (_req, res) => {
+    // Status only: never the AI service URL, secret or error details.
+    sendSuccess(res, { ai: await services.aiHealth() });
+  });
   adminRouter.get("/reports", adminReports.list);
+  adminRouter.get("/reports/map", adminReports.map);
   adminRouter.get("/reports/:id", adminReports.get);
+  adminRouter.get("/reports/:id/possible-duplicates", adminReports.possibleDuplicates);
+  adminRouter.post("/reports/:id/retry-analysis", adminReports.retryAnalysis);
   adminRouter.post("/reports/:id/review", adminReports.review);
   adminRouter.post("/reports/:id/decision", adminReports.decide);
   adminRouter.patch("/reports/:id/severity", adminReports.setSeverity);
@@ -133,6 +145,16 @@ export function createV1Router(deps?: V1Dependencies): Router {
   chatRouter.post("/conversations", chat.open);
   chatRouter.get("/conversations/:id/messages", chat.messages);
   router.use("/chat", chatRouter);
+
+  // In-app notifications, all roles. Each user only ever reaches their own rows (service).
+  const notificationsRouter = Router();
+  notificationsRouter.use(authenticate, requirePasswordChanged);
+  notificationsRouter.get("/", notifications.list);
+  notificationsRouter.get("/unread-count", notifications.unreadCount);
+  notificationsRouter.post("/read-all", notifications.markAllRead);
+  notificationsRouter.post("/conversations/:id/read", notifications.markConversationRead);
+  notificationsRouter.post("/:id/read", notifications.markRead);
+  router.use("/notifications", notificationsRouter);
 
   return router;
 }

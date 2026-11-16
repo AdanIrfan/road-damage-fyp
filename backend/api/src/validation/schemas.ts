@@ -234,7 +234,7 @@ export const listAdminReportsQuerySchema = z
       .min(1)
       .max(ADMIN_REPORT_LIST_MAX_PAGE_SIZE, `Page size must be at most ${ADMIN_REPORT_LIST_MAX_PAGE_SIZE}.`)
       .default(20),
-    sort: z.enum(["newest", "oldest"], { error: "Sort must be newest or oldest." }).default("newest"),
+    sort: z.enum(["newest", "oldest", "severity", "waiting"], { error: "Sort must be newest, oldest, severity or waiting." }).default("newest"),
     search: optionalText("Search", 100),
     status: z.enum(REPORT_STATUSES, { error: "Unknown report status." }).optional(),
     severity: z.enum(SEVERITY_LEVELS, { error: "Unknown severity." }).optional(),
@@ -349,3 +349,16 @@ export const analyticsQuerySchema = z
     message: "The start date must not be after the end date.",
     path: ["to"],
   });
+
+// ---------------------------------------------------------------------------
+// Phase 6: in-app notifications
+// ---------------------------------------------------------------------------
+
+export const listNotificationsQuerySchema = z.strictObject({
+  page: z.coerce.number().int().min(1, "Page must be 1 or more.").default(1),
+  pageSize: z.coerce.number().int().min(1).max(50, "Page size must be at most 50.").default(20),
+});
+
+export const notificationIdParamsSchema = z.strictObject({
+  id: z.uuid({ error: "Invalid notification id." }),
+});

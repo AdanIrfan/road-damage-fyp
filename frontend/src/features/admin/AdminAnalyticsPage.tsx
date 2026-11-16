@@ -1,23 +1,25 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
 import { Bar, BarChart, CartesianGrid, Cell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Alert, Card, Spinner } from "../../components/ui";
+import { Download } from "lucide-react";
+import { Alert, Button, Card, fieldClass, PageHeader, Skeleton, Spinner } from "../../components/ui";
 import { damageClassLabel, locationStatusLabel, reportStatusLabel, severityLabel } from "../../components/reports/labels";
 import { errorMessage } from "../../lib/api";
 import type { AdminAnalytics, AnalyticsGranularity, ReportStatus, SeverityLevel } from "../../lib/reportTypes";
 import { analyticsApi } from "./analyticsApi";
 
-// Tailwind palette values, so the charts match the rest of the UI.
+// Civic Ink values (see styles/index.css), so charts use the same meaning of colour as the rest of the UI.
 const COLORS = {
-  blue: "#2563eb",
-  sky: "#0ea5e9",
-  green: "#16a34a",
-  amber: "#f59e0b",
-  red: "#dc2626",
-  slate: "#94a3b8",
-  violet: "#7c3aed",
-  grid: "#e2e8f0",
-  axis: "#64748b",
+  blue: "#2f5bea",
+  sky: "#0e7490",
+  green: "#0f766e",
+  amber: "#e8a317",
+  red: "#b42318",
+  slate: "#8c96a3",
+  violet: "#6d4ad6",
+  ink: "#0e1a2b",
+  grid: "#e3e7ed",
+  axis: "#5b6675",
 };
 
 const STATUS_ORDER: ReportStatus[] = ["SUBMITTED", "UNDER_REVIEW", "ACCEPTED", "DELAYED", "REJECTED", "COMPLETED"];
@@ -107,19 +109,18 @@ export function AdminAnalyticsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Analytics</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Based on the reports stored in the system, by submission date (UTC). Severity is the estimated severity, or the admin's correction where set.
-          </p>
-        </div>
-        <Link to="/admin" className="text-sm font-medium text-blue-700 hover:underline">
-          ← Dashboard
-        </Link>
-      </div>
+      <PageHeader
+        title="Analytics"
+        description="Based on the reports stored in the system, by submission date (UTC). Severity is the estimated severity, or the admin's correction where set."
+        actions={
+          <Button variant="secondary" disabled={data === undefined} onClick={() => data !== undefined && downloadCsv(data)}>
+            <Download className="size-4" aria-hidden="true" />
+            Export CSV
+          </Button>
+        }
+      />
 
-      <div className="flex flex-wrap items-end gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+      <div className="flex flex-wrap items-end gap-3 rounded-xl border border-ink-150 bg-white px-4 py-3">
         <Select
           label="Period"
           value={preset}
@@ -143,14 +144,16 @@ export function AdminAnalyticsPage() {
             { value: "month", label: "Month" },
           ]}
         />
-        {loading && data !== undefined && <Spinner className="mb-2 size-5 text-blue-600" />}
+        {loading && data !== undefined && <Spinner className="mb-2 size-5 text-cobalt-600" />}
       </div>
 
       {error !== undefined && <Alert>{error}</Alert>}
       {data === undefined ? (
         loading && (
-          <div className="flex justify-center py-16 text-blue-600">
-            <Spinner />
+          <div className="space-y-6" role="status">
+            <span className="sr-only">Loading analytics</span>
+            <Skeleton className="h-24 w-full rounded-xl" />
+            <Skeleton className="h-72 w-full rounded-xl" />
           </div>
         )
       ) : (
@@ -190,12 +193,22 @@ function AnalyticsCharts({ data }: { data: AdminAnalytics }) {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <Stat label="Reports" value={data.total} />
+        <Stat label="High severity" value={data.bySeverity.HIGH} />
         <Stat label="Location to check" value={data.location.needsReview} to="/admin/reports?needsLocationReview=true" />
         <Stat label="Repairs in progress" value={rp.pending + rp.working} />
+        <Stat label="Awaiting confirmation" value={rp.awaitingConfirmation} to="/admin/reports?status=ACCEPTED&repairStatus=COMPLETED" />
         <Stat label="Repairs completed" value={rp.completed} />
       </div>
+
+      <Card title="Turnaround" description="Time from submission, for reports submitted in this period. Each report counts once per measure (its first review, first decision and completion).">
+        <dl className="grid gap-3 sm:grid-cols-3">
+          <Turnaround label="To review started" stat={data.turnaround.toReview} />
+          <Turnaround label="To first decision" stat={data.turnaround.toDecision} />
+          <Turnaround label="To confirmed repair" stat={data.turnaround.toCompletion} />
+        </dl>
+      </Card>
 
       <ChartCard title="Reports submitted" description={`Per ${data.range.granularity}.`} empty={empty}>
         <ResponsiveContainer width="100%" height={260}>
@@ -239,7 +252,7 @@ function AnalyticsCharts({ data }: { data: AdminAnalytics }) {
           <BarChart data={workloadData} layout="vertical" margin={{ left: 8, right: 16 }} title="Engineer workload">
             <CartesianGrid stroke={COLORS.grid} horizontal={false} />
             <XAxis type="number" allowDecimals={false} tick={{ fontSize: 12, fill: COLORS.axis }} />
-            <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 12, fill: COLORS.axis }} />
+            <YAxis type="category" dataKey="name" width={128} tick={{ fontSize: 12, fill: COLORS.axis }} />
             <Tooltip />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             <Bar dataKey="Open" stackId="w" fill={COLORS.blue} />
@@ -258,7 +271,7 @@ function AnalyticsCharts({ data }: { data: AdminAnalytics }) {
           <BarChart data={locationData} layout="vertical" margin={{ left: 8, right: 16 }} title="Location verification">
             <CartesianGrid stroke={COLORS.grid} horizontal={false} />
             <XAxis type="number" allowDecimals={false} tick={{ fontSize: 12, fill: COLORS.axis }} />
-            <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 12, fill: COLORS.axis }} />
+            <YAxis type="category" dataKey="name" width={128} tick={{ fontSize: 12, fill: COLORS.axis }} />
             <Tooltip />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             <Bar dataKey="No review needed" stackId="l" fill={COLORS.green} />
@@ -277,7 +290,7 @@ function SimpleBars({ data, label }: { data: { name: string; value: number; colo
       <BarChart data={data} layout="vertical" margin={{ left: 8, right: 16 }} title={label}>
         <CartesianGrid stroke={COLORS.grid} horizontal={false} />
         <XAxis type="number" allowDecimals={false} tick={{ fontSize: 12, fill: COLORS.axis }} />
-        <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 12, fill: COLORS.axis }} />
+        <YAxis type="category" dataKey="name" width={128} tick={{ fontSize: 12, fill: COLORS.axis }} />
         <Tooltip />
         <Bar dataKey="value" name="Reports" radius={[0, 3, 3, 0]}>
           {data.map((d) => (
@@ -304,23 +317,51 @@ function ChartCard({
 }) {
   return (
     <Card title={title} {...(description === undefined ? {} : { description })}>
-      {empty ? <p className="py-10 text-center text-sm text-slate-500">{emptyText}</p> : children}
+      {empty ? <p className="py-10 text-center text-sm text-ink-500">{emptyText}</p> : children}
     </Card>
+  );
+}
+
+/** "45 min", "6.5 h" or "3.2 d": hours are awkward to read once they pass a day. */
+function formatHours(hours: number): string {
+  if (hours < 1) return `${Math.round(hours * 60)} min`;
+  if (hours < 48) return `${hours.toFixed(1)} h`;
+  return `${(hours / 24).toFixed(1)} d`;
+}
+
+function Turnaround({ label, stat }: { label: string; stat: AdminAnalytics["turnaround"]["toReview"] }) {
+  return (
+    <div className="rounded-[10px] border border-ink-150 bg-canvas px-4 py-3">
+      <dt className="text-xs font-medium text-ink-500">{label}</dt>
+      <dd className="mt-1">
+        {stat.medianHours === null ? (
+          <span className="text-sm text-ink-500">No reports reached this point yet</span>
+        ) : (
+          <>
+            <span className="text-2xl leading-tight font-bold text-ink-900 tabular-nums">{formatHours(stat.medianHours)}</span>
+            <span className="ml-1.5 text-xs text-ink-500">median</span>
+            <span className="block text-xs text-ink-500">
+              average {formatHours(stat.averageHours ?? stat.medianHours)} · {stat.reports} report{stat.reports === 1 ? "" : "s"}
+            </span>
+          </>
+        )}
+      </dd>
+    </div>
   );
 }
 
 function Stat({ label, value, to }: { label: string; value: number; to?: string }) {
   const body = (
     <>
-      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="mt-1 text-2xl font-semibold text-slate-900">{value}</div>
+      <div className="text-xs font-medium text-ink-500">{label}</div>
+      <div className="mt-1 text-3xl leading-tight font-bold text-ink-900 tabular-nums">{value}</div>
     </>
   );
-  const className = "block rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm";
+  const className = "block rounded-xl border border-ink-150 bg-white px-4 py-3.5";
   return to === undefined ? (
     <div className={className}>{body}</div>
   ) : (
-    <Link to={to} className={`${className} transition hover:border-blue-400`}>
+    <Link to={to} className={`${className} transition hover:border-cobalt-500`}>
       {body}
     </Link>
   );
@@ -329,11 +370,11 @@ function Stat({ label, value, to }: { label: string; value: number; to?: string 
 function Select({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: { value: string; label: string }[] }) {
   return (
     <label className="text-sm">
-      <span className="mb-1 block font-medium text-slate-700">{label}</span>
+      <span className="mb-1 block text-xs font-semibold text-ink-600">{label}</span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+        className={`${fieldClass} min-h-10 w-auto`}
       >
         {options.map((o) => (
           <option key={o.value} value={o.value}>
@@ -348,13 +389,75 @@ function Select({ label, value, onChange, options }: { label: string; value: str
 function DateInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
     <label className="text-sm">
-      <span className="mb-1 block font-medium text-slate-700">{label}</span>
+      <span className="mb-1 block text-xs font-semibold text-ink-600">{label}</span>
       <input
         type="date"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+        className={`${fieldClass} min-h-10 w-auto`}
       />
     </label>
   );
+}
+
+/** Quotes a CSV cell when needed; cells that could be read as formulas are prefixed so spreadsheets treat them as text. */
+function csvCell(value: string | number): string {
+  const text = String(value);
+  const safe = /^[=+\-@]/.test(text) ? `'${text}` : text;
+  return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+}
+
+/**
+ * Downloads exactly the numbers shown on this page (same period, same counting rules) as CSV.
+ * Built in the browser from the analytics response; no extra request and no personal data.
+ */
+function downloadCsv(data: AdminAnalytics) {
+  const rows: (string | number)[][] = [
+    ["Section", "Item", "Value"],
+    ["Range", "From (UTC)", data.range.from ?? "all time"],
+    ["Range", "To (UTC)", data.range.to ?? "all time"],
+    ["Range", "Grouped by", data.range.granularity],
+    ["Totals", "Reports", data.total],
+    ...data.overTime.map((p) => ["Reports submitted", p.period, p.count]),
+    ...STATUS_ORDER.map((status) => ["By status", reportStatusLabel[status], data.byStatus[status]]),
+    ...SEVERITY_ORDER.map((level) => ["By severity", level === "NONE" ? "Not estimated" : severityLabel[level], data.bySeverity[level]]),
+    ...data.damageClasses.byClass.map((c) => ["Damage types (reports with at least one)", damageClassLabel(c.className), c.reports]),
+    ["Damage types (reports with at least one)", "No damage detected", data.damageClasses.noDetections],
+    ["Damage types (reports with at least one)", "Not analysed", data.damageClasses.aiFailed],
+    ["Repair progress", "Not assigned", data.repairProgress.unassigned],
+    ["Repair progress", "Pending", data.repairProgress.pending],
+    ["Repair progress", "Working", data.repairProgress.working],
+    ["Repair progress", "Awaiting confirmation", data.repairProgress.awaitingConfirmation],
+    ["Repair progress", "Completed", data.repairProgress.completed],
+    ...data.engineerWorkload.flatMap((w) => [
+      [`Engineer workload: ${w.fullName}`, "Open", w.open],
+      [`Engineer workload: ${w.fullName}`, "Awaiting confirmation", w.awaitingConfirmation],
+      [`Engineer workload: ${w.fullName}`, "Completed", w.completed],
+    ]),
+    ...(
+      [
+        ["To review started", data.turnaround.toReview],
+        ["To first decision", data.turnaround.toDecision],
+        ["To confirmed repair", data.turnaround.toCompletion],
+      ] as const
+    ).flatMap(([label, stat]) => [
+      [`Turnaround: ${label}`, "Reports", stat.reports],
+      [`Turnaround: ${label}`, "Median hours", stat.medianHours ?? ""],
+      [`Turnaround: ${label}`, "Average hours", stat.averageHours ?? ""],
+    ]),
+    ...data.location.byStatus.flatMap((l) => [
+      [`Location: ${locationStatusLabel[l.status]}`, "Reports", l.reports],
+      [`Location: ${locationStatusLabel[l.status]}`, "Needs review", l.needsReview],
+    ]),
+  ];
+  const csv = rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
+  // The BOM makes Excel read the file as UTF-8.
+  const url = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `road-damage-analytics_${data.range.from ?? "all"}_${data.range.to ?? "time"}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
